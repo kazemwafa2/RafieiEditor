@@ -17,6 +17,18 @@ class App : Application() {
         super.onCreate()
         ctx = applicationContext
         Lang.init(this)
+        // Local crash log: only the stack trace is stored (never project files); the user decides whether to share it.
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                val info = "time=" + java.util.Date() + "\nandroid=" + android.os.Build.VERSION.SDK_INT + "\n" + sw.toString().take(6000)
+                java.io.File(filesDir, "last_crash.txt").writeText(info)
+            } catch (x: Throwable) {
+            }
+            prev?.uncaughtException(t, e)
+        }
     }
 
     companion object {

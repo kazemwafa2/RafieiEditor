@@ -1,0 +1,60 @@
+package com.rafiei.editor
+
+class EqImgMeta(val id: String, val title: String, val bar1: String, val bar2: String, val bar3: String, val text2: String, val letter: String)
+
+val EQ_IMG_META = listOf(
+    EqImgMeta("a1", "ققنوس نئونی", "#b192d9", "#1aa0eb", "#e68881", "#5fbcf1", "#98d4f6"),
+    EqImgMeta("a2", "گل موزیکال سه‌بعدی", "#c63de5", "#8b9ef1", "#8197f4", "#aebbf5", "#cbd3f9"),
+    EqImgMeta("a3", "گرگ سایبری", "#8da5f5", "#1859f4", "#7becfc", "#5d8bf7", "#97b4fa"),
+    EqImgMeta("a4", "حلقه طلایی مایع", "#f9ed71", "#b5711b", "#f6d96f", "#cb9c60", "#ddbf98"),
+    EqImgMeta("a5", "پورتال انرژی", "#1f2de4", "#8f39d3", "#bac6f4", "#b074e0", "#cca6eb"),
+    EqImgMeta("a6", "پروانه هولوگرافیک", "#376eef", "#ab89f1", "#a4e1fc", "#c4adf5", "#d9caf9"),
+    EqImgMeta("a7", "خوشنویسی زنده", "#f8e474", "#3e8bd7", "#e1b17c", "#78ade3", "#a8caed"),
+    EqImgMeta("a8", "کاست موزیک آینده", "#3cc9f6", "#383be1", "#dc90f7", "#7476ea", "#a5a6f1"),
+    EqImgMeta("b1", "عاشقانه (قلب)", "#1d5bd7", "#871ecc", "#deaef6", "#ab61db", "#c99ae8"),
+    EqImgMeta("b2", "ماشین اسپرت", "#157bc4", "#24ddf6", "#b8e4e2", "#66e7f9", "#9ceffb"),
+    EqImgMeta("b3", "ساعت طلایی", "#ecac2b", "#b76e20", "#f9eaac", "#cc9963", "#debd9a"),
+    EqImgMeta("b4", "سیارات و زمین", "#b973d3", "#281ac4", "#89a5e8", "#685fd5", "#9e98e4"),
+    EqImgMeta("b5", "شیر تاج‌دار", "#1236c6", "#2b7be1", "#b7cde7", "#6ba2ea", "#9fc3f1"),
+    EqImgMeta("b6", "ماه و دریاچه", "#e078dd", "#c83783", "#906bdb", "#d873a8", "#e6a5c7"),
+    EqImgMeta("b7", "پروانه نئونی", "#eb98c4", "#ca3540", "#a876d2", "#da7179", "#e7a4a9"),
+    EqImgMeta("b8", "شهر شبانه", "#1f4ec6", "#2edcf9", "#d98fec", "#6ce6fa", "#a0effc"),
+    EqImgMeta("b9", "گل رز قرمز", "#db345a", "#c4061b", "#f7afc4", "#d6515f", "#e48f98"),
+    EqImgMeta("b10", "گرگ آبی", "#1ea5f0", "#0e43cf", "#a7edfa", "#567bdd", "#92aae9"),
+    EqImgMeta("b11", "کوهستان", "#18caf8", "#105acd", "#a3f0f8", "#588cdc", "#93b5e8"),
+    EqImgMeta("b12", "ساعت شنی", "#ecb635", "#b86e1a", "#fcf0ad", "#cd995f", "#dfbd98"),
+    EqImgMeta("b13", "عقاب آتشین", "#cd6b1c", "#1669d7", "#f9e4a2", "#5b96e3", "#96bbed"),
+    EqImgMeta("b14", "مسجد و هلال", "#0f65c5", "#2bdcf9", "#e5b773", "#6be7fb", "#a0effc"),
+    EqImgMeta("b15", "هدفون", "#516ed9", "#1129d4", "#7feafc", "#5869e0", "#949eeb"),
+    EqImgMeta("b16", "گرگ و ماه سرخ", "#d04494", "#114eb7", "#81d7f6", "#5983cd", "#94afde"),
+    EqImgMeta("c1", "عاشقانه با قلب‌ها", "#38d9f9", "#1e36c8", "#d985db", "#6272d8", "#9aa4e6"),
+    EqImgMeta("c2", "ماشین اسپرت شهری", "#1a46c8", "#2ed7f7", "#d687ee", "#6ce3f9", "#a0edfb"),
+    EqImgMeta("c3", "ساعت طلایی لوکس", "#e7a625", "#b36312", "#faeda7", "#ca9159", "#ddb894"),
+    EqImgMeta("c4", "منظومه شمسی", "#44bbf3", "#1a4fcc", "#e1b0ac", "#5f83db", "#98afe8"),
+    EqImgMeta("c5", "شیر تاج‌دار (۲)", "#3372e3", "#0f20d0", "#a7e5f9", "#5763de", "#939be9"),
+    EqImgMeta("c6", "ساکورا و ماه", "#af1a8b", "#e230b7", "#f5aae9", "#eb6ecc", "#f2a2de"),
+    EqImgMeta("c7", "پروانهٔ آبی", "#59b9f8", "#1627d5", "#c589ea", "#5c68e2", "#969eec"),
+    EqImgMeta("c8", "شهر غروب", "#8658d2", "#252dbf", "#f0a4c5", "#666cd2", "#9da0e2"),
+    EqImgMeta("c9", "رز قرمز", "#e71f1b", "#b90808", "#f4aaa7", "#ce5252", "#df9090"),
+    EqImgMeta("c10", "گرگ نئونی", "#3a73e9", "#0f21c9", "#95ecfd", "#5763d9", "#939be7"),
+    EqImgMeta("c11", "شفق قطبی و جنگل", "#117fb8", "#17e6ee", "#aaecf5", "#5deef3", "#96f4f7"),
+    EqImgMeta("c12", "ساعت شنی طلایی", "#b9640e", "#f0b529", "#fcf0a9", "#f4cb69", "#f8dd9e"),
+    EqImgMeta("c13", "عقاب بالدار", "#28dbf8", "#dd901d", "#6095d9", "#e7b161", "#efcd99"),
+    EqImgMeta("c14", "مسجد و هلال (۲)", "#eca522", "#b85b0c", "#fbeea6", "#cd8c55", "#dfb592"),
+    EqImgMeta("c15", "هدفون بنفش", "#a549e1", "#102cd2", "#7de3fc", "#586bdf", "#93a0ea"),
+    EqImgMeta("c16", "گرگ و ماه سرخ (۲)", "#7911a9", "#c333d1", "#f3aff6", "#d570de", "#e4a3ea"),
+    EqImgMeta("c17", "قلب و رز قرمز", "#e8592f", "#cf0f07", "#facaa8", "#dd5751", "#e9938f"),
+    EqImgMeta("c18", "ساعت و ماشین", "#12b6f6", "#1747c1", "#aad4ed", "#5c7ed3", "#96ace3"),
+    EqImgMeta("c19", "اژدهای آبی", "#ca6016", "#3a94dc", "#f7db84", "#75b4e6", "#a6cfef"),
+    EqImgMeta("c20", "جنگل جادویی", "#3067b8", "#93bfe9", "#aedc94", "#b3d2ef", "#cee2f5"),
+    EqImgMeta("c21", "قلعهٔ شناور", "#b879df", "#3357e2", "#9ce3fc", "#7089eb", "#a3b3f2")
+)
+
+val EQ_BG_META = listOf(
+    Pair("waterfall", "آبشار شب"),
+    Pair("planet", "سیارهٔ نئونی"),
+    Pair("car", "ماشین قرمز"),
+    Pair("butterfly", "پروانهٔ نوری"),
+    Pair("wolf", "گرگ آبی"),
+    Pair("wave", "موج و کوهستان")
+)

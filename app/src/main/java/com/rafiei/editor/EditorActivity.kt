@@ -272,6 +272,8 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
     override fun onOverlayEdit(id: String) {
         val o = proj.overlays.firstOrNull { it.id == id } ?: return
         if (o.kind == "text") openTextPanel(o, null)
+        else if (o.kind == "eq") openEqPanel(o)
+        else if (o.kind == "comp") openCompPanel(o)
     }
 
     // ---------------------------------------------------------------- state helpers
@@ -502,7 +504,16 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         items.add(ToolItem("filter", L("فیلتر", "Filter")) { openFilterPanel(0) })
         items.add(ToolItem("adjust", L("تنظیم", "Adjust")) { openFilterPanel(1) })
         items.add(ToolItem("crop", L("برش/زوم", "Crop")) { openCropPanel() })
-        items.add(ToolItem("pip", L("عکس روی ویدیو", "PIP")) { pickPip() })
+        items.add(ToolItem("pip", L("پیپ (عکس/ویدیو)", "PIP")) { pickPip() })
+        items.add(ToolItem("music", L("اکولایزر", "Equalizer")) { openEqPanel(null) })
+        items.add(ToolItem("collage", L("کلاژ متحرک", "Photo comp")) { openCompPanel(null) })
+        items.add(ToolItem("anim", L("حرکت", "Motion")) { openMotionPanel() })
+        items.add(ToolItem("wand", L("استودیو نور", "Light")) { openLightPanel() })
+        items.add(ToolItem("font", L("زیرنویس", "Subtitle")) { openSubtitlePanel() })
+        items.add(ToolItem("import", L("فایل SRT", "SRT")) { openSrtMenu() })
+        items.add(ToolItem("mic", L("زیرنویس خودکار", "Auto subs")) { openAutoSubPanel() })
+        items.add(ToolItem("sfx", L("ضرب موسیقی", "Beat sync")) { openBeatPanel() })
+        if (proj.clips.isNotEmpty()) items.add(ToolItem("layers", L("چند نسخه حرکت", "Variants")) { selClip() ?: targetClip()?.let { timeline.selection = Sel("clip", it.id) }; openVariantsPanel() })
         if (!isPhoto) items.add(ToolItem("speed", L("سرعت", "Speed")) {
             val c = targetClip()
             if (c == null || c.isImage) toast(L("یک ویدیو انتخاب کنید.", "Select a video clip.")) else {
@@ -518,6 +529,9 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         val items = ArrayList<ToolItem>()
         if (!isPhoto) items.add(ToolItem("split", L("برش", "Split")) { splitAtPlayhead() })
         if (!c.isImage) items.add(ToolItem("speed", L("سرعت", "Speed")) { openSpeedPanel() })
+        if (!c.isImage) items.add(ToolItem("trans", L("منحنی سرعت", "Speed ramp")) { openSpeedRampPanel() })
+        if (!c.isImage) items.add(ToolItem("reverse", L("معکوس", "Reverse")) { reverseSelectedClip() })
+        items.add(ToolItem("zoom", L("کی‌فریم", "Keyframes")) { openKeyframePanel() })
         if (c.isImage && !isPhoto) items.add(ToolItem("trim", L("مدت", "Duration")) { openDurationPanel() })
         if (!c.isImage) items.add(ToolItem("volume", L("صدا", "Volume")) { openVolumePanel() })
         if (!isPhoto) items.add(ToolItem("anim", L("انیمیشن", "Animate")) { openAnimPanel() })
@@ -527,6 +541,8 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         items.add(ToolItem("canvas", if (c.fill) L("پر کردن", "Fill") else L("جا دادن", "Fit")) { mutateClip { it.fill = !it.fill; it.panX = 0f; it.panY = 0f }; refreshToolbar() })
         items.add(ToolItem("filter", L("فیلتر", "Filter")) { openFilterPanel(0) })
         items.add(ToolItem("adjust", L("تنظیم", "Adjust")) { openFilterPanel(1) })
+        items.add(ToolItem("wand", L("حرکت عکس", "Motion")) { openMotionPanel() })
+        items.add(ToolItem("effect", L("نور", "Light")) { openLightPanel() })
         if (!isPhoto) {
             items.add(ToolItem("copy", L("کپی", "Duplicate")) { duplicateClip() })
             if (!c.isImage) items.add(ToolItem("freeze", L("توقف تصویر", "Freeze")) { freezeFrame() })
@@ -540,6 +556,9 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         val o = selOverlay() ?: return mainToolbar()
         val items = ArrayList<ToolItem>()
         if (o.kind == "text") items.add(ToolItem("keyboard", L("ویرایش", "Edit")) { openTextPanel(o, null) })
+        if (o.kind == "eq") items.add(ToolItem("music", L("ویرایش طرح", "Edit")) { openEqPanel(o) })
+        if (o.kind == "comp") items.add(ToolItem("collage", L("ویرایش کلاژ", "Edit")) { openCompPanel(o) })
+        if (o.kind == "image") items.add(ToolItem("wand", L("پرده سبز", "Chroma key")) { openChromaPanel() })
         items.add(ToolItem("anim", L("انیمیشن", "Animate")) { openOverlayAnimPanel() })
         items.add(ToolItem("opacity", L("شفافیت", "Opacity")) { openOpacityPanel() })
         items.add(ToolItem("flip", L("آینه", "Mirror")) { beginChange(); o.flipH = !o.flipH; changed() })
@@ -554,6 +573,7 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         val items = ArrayList<ToolItem>()
         items.add(ToolItem("volume", L("صدا", "Volume")) { openAudioVolumePanel() })
         items.add(ToolItem("speed", L("سرعت", "Speed")) { openAudioSpeedPanel() })
+        items.add(ToolItem("adjust", L("اکولایزر و نویز", "EQ / Noise")) { openAudioFxPanel() })
         items.add(ToolItem("split", L("برش", "Split")) { splitAudio(a) })
         items.add(ToolItem("copy", L("کپی", "Duplicate")) {
             beginChange()
@@ -820,7 +840,12 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
     }
 
     fun pickPip() {
-        pick(arrayOf("image/*"), false, REQ_PIP) { uris -> importOverlayImage(uris, "image") }
+        pick(arrayOf("image/*", "video/*"), false, REQ_PIP) { uris ->
+            if (uris.isNotEmpty()) {
+                val type = try { contentResolver.getType(uris[0]) ?: "" } catch (e: Exception) { "" }
+                if (type.startsWith("video")) importPipVideo(uris[0]) else importOverlayImage(uris, "image")
+            }
+        }
     }
 
     fun pickStickerImage() {

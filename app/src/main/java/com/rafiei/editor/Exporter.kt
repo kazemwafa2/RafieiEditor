@@ -148,8 +148,9 @@ object Exporter {
     /** Copy of the project that can be used from other threads. */
     fun copyProject(p: Project): Project = Project.fromJson(JSONObject(p.snapshot()))
 
-    fun build(ctx: Context, src: Project, outW: Int, outH: Int, safe: Boolean): Result {
+    fun build(ctx: Context, src: Project, outW: Int, outH: Int, safe: Boolean, fps: Int = 0): Result {
         val p = copyProject(src)
+        if (p.overlays.any { it.kind == "eq" } || p.audios.any { it.duck > 0.01f }) EqAudio.prepareBlocking(p)
         val total = p.totalMs()
         val videoItems = ArrayList<EditedMediaItem>()
         var start = 0L
@@ -181,7 +182,7 @@ object Exporter {
                     val rel = relMs(tUs, clipStart)
                     val d = Fx.dyn(p, idx, rel, clipStart + rel)
                     val xf = Fx.xform(c, d)
-                    Fx.ndcMatrix(xf[0], xf[1], xf[2], xf[3], aspect)
+                    Fx.ndcMatrix(xf[0], xf[1], xf[2], xf[3], aspect, xf[4], xf[5])
                 })
             }
             if (!safe) {
@@ -269,14 +270,20 @@ object Exporter {
                     .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(a.trimStart).setEndPositionMs(srcEnd).build())
                     .build()
                 val procs = ArrayList<AudioProcessor>()
-                if (Math.abs(a.speed - 1f) > 0.001f) {
+                if (!safe && a.hasFx()) procs.add(FxAudioProcessor(a.eqL, a.eqM, a.eqH, a.denoise, a.voice))
+                if (Math.abs(a.speed - 1f) > 0.001f || Math.abs(a.pitch - 1f) > 0.001f) {
                     val s = SonicAudioProcessor()
                     s.setSpeed(a.speed)
-                    s.setPitch(1f)
+                    s.setPitch(a.pitch)
                     procs.add(s)
                 }
                 if (Math.abs(a.volume - 1f) > 0.001f || a.fadeIn > 0 || a.fadeOut > 0) {
                     procs.add(GainAudioProcessor(a.volume, a.fadeIn, a.fadeOut, maxDur))
+                }
+                if (!safe && a.duck > 0.01f) {
+                    val pp = p
+                    val aa = a
+                    procs.add(DuckProcessor(a.startMs) { t -> Duck.gain(pp, aa, t) })
                 }
                 items.add(EditedMediaItem.Builder(mi).setRemoveVideo(true).setEffects(Effects(procs, ArrayList<Effect>())).build())
                 cursor = a.startMs + maxDur
@@ -288,13 +295,18 @@ object Exporter {
         if (anyMusic) sequences.addAll(laneSeqs)
 
         val builder = Composition.Builder(sequences)
+        val compEffects = ArrayList<Effect>()
         if (!safe && needsOverlay(p, outW, outH)) {
             val overlay = TimelineOverlay(p, outW, outH)
-            val oe = OverlayEffect(ImmutableList.of<TextureOverlay>(overlay))
-            val list = ArrayList<Effect>()
-            list.add(oe)
-            builder.setEffects(Effects(ArrayList<AudioProcessor>(), list))
+            compEffects.add(OverlayEffect(ImmutableList.of<TextureOverlay>(overlay)))
         }
+        if (fps > 0) {
+            try {
+                compEffects.add(androidx.media3.effect.FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
+            } catch (e: Throwable) {
+            }
+        }
+        if (compEffects.isNotEmpty()) builder.setEffects(Effects(ArrayList<AudioProcessor>(), compEffects))
         return Result(builder.build(), total)
     }
 
@@ -302,7 +314,8 @@ object Exporter {
         if (p.overlays.isNotEmpty()) return true
         for (f in p.fxs) if (Fx.fxDef(f.fx).overlay) return true
         for (c in p.clips) {
-            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f) return true
+            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null) return true
+            if (c.motion.isNotEmpty() && Motion.hasOverlayPost(c.motion)) return true
             if (!c.fill) {
                 val r = Geo.clipRect(c, W.toFloat(), H.toFloat())
                 val bars = Math.abs(r[2] - W) > 1.5f || Math.abs(r[3] - H) > 1.5f

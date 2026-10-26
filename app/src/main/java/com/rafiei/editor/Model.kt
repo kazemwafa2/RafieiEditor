@@ -47,6 +47,10 @@ class Clip {
     var animInMs = 500L
     var animOut = "none"
     var animOutMs = 500L
+    var light = ""
+    var motion = ""
+    var motionAmt = 1f
+    var kf = ""
 
     fun durMs(): Long = if (isImage) imgDur else Math.max(100L, ((trimEnd - trimStart) / speed).toLong())
     fun dispW(): Int = if (rot % 180 == 0) w else h
@@ -66,6 +70,9 @@ class Clip {
         val a = JSONArray(); for (v in adj) a.put(v.toDouble()); o.put("adj", a)
         o.put("tr", trans); o.put("trms", transMs)
         o.put("ai", animIn); o.put("aims", animInMs); o.put("ao", animOut); o.put("aoms", animOutMs)
+        if (light.isNotEmpty()) o.put("light", light)
+        if (kf.isNotEmpty()) o.put("kf", kf)
+        if (motion.isNotEmpty()) { o.put("mo", motion); o.put("moa", motionAmt.toDouble()) }
         return o
     }
 
@@ -84,6 +91,9 @@ class Clip {
             c.trans = o.optString("tr", "none"); c.transMs = o.optLong("trms", 600)
             c.animIn = o.optString("ai", "none"); c.animInMs = o.optLong("aims", 500)
             c.animOut = o.optString("ao", "none"); c.animOutMs = o.optLong("aoms", 500)
+            c.light = o.optString("light", "")
+            c.kf = o.optString("kf", "")
+            c.motion = o.optString("mo", ""); c.motionAmt = o.optDouble("moa", 1.0).toFloat()
             return c
         }
     }
@@ -102,6 +112,16 @@ class AudioItem {
     var speed = 1f
     var fadeIn = 0L
     var fadeOut = 0L
+    var eqL = 0f
+    var eqM = 0f
+    var eqH = 0f
+    var denoise = 0f
+    var voice = false
+    var duck = 0f
+    var pitch = 1f
+
+    fun hasFx(): Boolean = Math.abs(eqL) > 0.05f || Math.abs(eqM) > 0.05f || Math.abs(eqH) > 0.05f || denoise > 0.01f || voice
+    fun fxKey(): String = "$eqL|$eqM|$eqH|$denoise|$voice"
 
     fun durMs(): Long = Math.max(100L, ((trimEnd - trimStart) / speed).toLong())
     fun endMs(): Long = startMs + durMs()
@@ -111,6 +131,9 @@ class AudioItem {
         o.put("id", id); o.put("uri", uri); o.put("name", name); o.put("kind", kind)
         o.put("st", startMs); o.put("src", srcDurMs); o.put("ts", trimStart); o.put("te", trimEnd)
         o.put("vol", volume.toDouble()); o.put("speed", speed.toDouble()); o.put("fi", fadeIn); o.put("fo", fadeOut)
+        if (hasFx()) { o.put("eqL", eqL.toDouble()); o.put("eqM", eqM.toDouble()); o.put("eqH", eqH.toDouble()); o.put("dn", denoise.toDouble()); o.put("vc", voice) }
+        if (duck > 0f) o.put("duck", duck.toDouble())
+        if (Math.abs(pitch - 1f) > 0.001f) o.put("pt", pitch.toDouble())
         return o
     }
 
@@ -121,6 +144,8 @@ class AudioItem {
             a.startMs = o.optLong("st"); a.srcDurMs = o.optLong("src"); a.trimStart = o.optLong("ts"); a.trimEnd = o.optLong("te")
             a.volume = o.optDouble("vol", 1.0).toFloat(); a.speed = o.optDouble("speed", 1.0).toFloat()
             a.fadeIn = o.optLong("fi"); a.fadeOut = o.optLong("fo")
+            a.eqL = o.optDouble("eqL", 0.0).toFloat(); a.eqM = o.optDouble("eqM", 0.0).toFloat(); a.eqH = o.optDouble("eqH", 0.0).toFloat()
+            a.denoise = o.optDouble("dn", 0.0).toFloat(); a.voice = o.optBoolean("vc"); a.duck = o.optDouble("duck", 0.0).toFloat(); a.pitch = o.optDouble("pt", 1.0).toFloat()
             return a
         }
     }
@@ -160,6 +185,13 @@ class Overlay {
     var glyph = ""
     var uri = ""
     var imgAspect = 1f
+    var cfg = "" // equalizer configuration (JSON)
+    var frames = "" // PIP video: directory with extracted frames f0.jpg, f1.jpg ...
+    var fps = 10
+    var nf = 0
+    var chroma = 0 // colour key (0 = off)
+    var chromaTol = 0.3f
+    var chromaSoft = 0.12f
 
     var animIn = "none"
     var animInMs = 500L
@@ -177,7 +209,9 @@ class Overlay {
         o.put("b", bold); o.put("i", italic); o.put("al", align); o.put("sp", spacing.toDouble())
         o.put("oc", outlineColor); o.put("ow", outlineW.toDouble()); o.put("sh", shadow.toDouble()); o.put("shc", shadowColor)
         o.put("bc", bgColor); o.put("ba", bgAlpha.toDouble())
-        o.put("glyph", glyph); o.put("uri", uri); o.put("asp", imgAspect.toDouble())
+        o.put("glyph", glyph); o.put("uri", uri); o.put("cfg", cfg); o.put("asp", imgAspect.toDouble())
+        if (nf > 0) { o.put("frd", frames); o.put("fps", fps); o.put("nf", nf) }
+        if (chroma != 0) { o.put("ck", chroma); o.put("ckt", chromaTol.toDouble()); o.put("cks", chromaSoft.toDouble()) }
         o.put("ai", animIn); o.put("aims", animInMs); o.put("ao", animOut); o.put("aoms", animOutMs)
         return o
     }
@@ -195,7 +229,9 @@ class Overlay {
             v.outlineColor = o.optInt("oc", Color.BLACK); v.outlineW = o.optDouble("ow", 0.0).toFloat()
             v.shadow = o.optDouble("sh", 0.0).toFloat(); v.shadowColor = o.optInt("shc", Color.BLACK)
             v.bgColor = o.optInt("bc", Color.BLACK); v.bgAlpha = o.optDouble("ba", 0.0).toFloat()
-            v.glyph = o.optString("glyph"); v.uri = o.optString("uri"); v.imgAspect = o.optDouble("asp", 1.0).toFloat()
+            v.glyph = o.optString("glyph"); v.uri = o.optString("uri"); v.cfg = o.optString("cfg"); v.imgAspect = o.optDouble("asp", 1.0).toFloat()
+            v.frames = o.optString("frd"); v.fps = o.optInt("fps", 10); v.nf = o.optInt("nf", 0)
+            v.chroma = o.optInt("ck", 0); v.chromaTol = o.optDouble("ckt", 0.3).toFloat(); v.chromaSoft = o.optDouble("cks", 0.12).toFloat()
             v.animIn = o.optString("ai", "none"); v.animInMs = o.optLong("aims", 500)
             v.animOut = o.optString("ao", "none"); v.animOutMs = o.optLong("aoms", 500)
             return v

@@ -366,6 +366,7 @@ class PreviewEngine(val ctx: Context, val stage: PreviewStage, val projectProvid
     private var lastImgUri = ""
     private var released = false
     private val audioPlayers = HashMap<String, ExoPlayer>()
+    private val audioKeys = HashMap<String, String>()
     private var lastUiNotify = 0L
     private var colorSig = ""
 
@@ -530,8 +531,26 @@ class PreviewEngine(val ctx: Context, val stage: PreviewStage, val projectProvid
                     active.add(a.id)
                     var pl = audioPlayers[a.id]
                     val srcPos = ((t - a.startMs) * a.speed).toLong()
+                    if (pl != null && audioKeys[a.id] != a.fxKey()) {
+                        try { pl.release() } catch (e: Exception) { }
+                        audioPlayers.remove(a.id)
+                        pl = null
+                    }
                     if (pl == null) {
-                        pl = ExoPlayer.Builder(ctx).build()
+                        pl = if (a.hasFx()) {
+                            val proc = FxAudioProcessor(a.eqL, a.eqM, a.eqH, a.denoise, a.voice)
+                            val rf = object : androidx.media3.exoplayer.DefaultRenderersFactory(ctx) {
+                                override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): androidx.media3.exoplayer.audio.AudioSink? {
+                                    return androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                                        .setEnableFloatOutput(false)
+                                        .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                                        .setAudioProcessors(arrayOf<androidx.media3.common.audio.AudioProcessor>(proc))
+                                        .build()
+                                }
+                            }
+                            ExoPlayer.Builder(ctx, rf).build()
+                        } else ExoPlayer.Builder(ctx).build()
+                        audioKeys[a.id] = a.fxKey()
                         pl.setMediaItem(
                             MediaItem.Builder().setUri(Uri.parse(a.uri)).setClippingConfiguration(
                                 MediaItem.ClippingConfiguration.Builder().setStartPositionMs(a.trimStart).setEndPositionMs(a.trimEnd).build()
@@ -545,12 +564,13 @@ class PreviewEngine(val ctx: Context, val stage: PreviewStage, val projectProvid
                         if (!pl.playWhenReady) pl.playWhenReady = true
                         if (Math.abs(pl.currentPosition - srcPos) > 400 && pl.playbackState == Player.STATE_READY) pl.seekTo(srcPos)
                     }
-                    if (Math.abs(pl.playbackParameters.speed - a.speed) > 0.001f) pl.playbackParameters = PlaybackParameters(a.speed)
+                    if (Math.abs(pl.playbackParameters.speed - a.speed) > 0.001f || Math.abs(pl.playbackParameters.pitch - a.pitch) > 0.001f) pl.playbackParameters = PlaybackParameters(a.speed, a.pitch)
                     var v = a.volume
                     val lt = t - a.startMs
                     val rem = a.endMs() - t
                     if (a.fadeIn > 0 && lt < a.fadeIn) v *= lt.toFloat() / a.fadeIn
                     if (a.fadeOut > 0 && rem < a.fadeOut) v *= rem.toFloat() / a.fadeOut
+                    if (a.duck > 0.01f) v *= Duck.gain(pr, a, t)
                     pl.volume = clampF(v, 0f, 1f)
                 }
             }
@@ -663,8 +683,8 @@ class PreviewEngine(val ctx: Context, val stage: PreviewStage, val projectProvid
         val xf = Fx.xform(c, d)
         val fw = stage.frame.layoutParams.width.toFloat()
         val fh = stage.frame.layoutParams.height.toFloat()
-        stage.zoomLayer.scaleX = xf[0]
-        stage.zoomLayer.scaleY = xf[0]
+        stage.zoomLayer.scaleX = xf[0] * xf[4]
+        stage.zoomLayer.scaleY = xf[0] * xf[5]
         stage.zoomLayer.translationX = xf[1] * fw
         stage.zoomLayer.translationY = xf[2] * fh
         stage.zoomLayer.rotation = xf[3]

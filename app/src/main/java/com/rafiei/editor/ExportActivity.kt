@@ -16,7 +16,9 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import android.os.StatFs
 import androidx.media3.common.MimeTypes
+import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.ExportException
@@ -42,6 +44,15 @@ class ExportActivity : Activity() {
     private var progressText: TextView? = null
     private var expectedMs = 0L
     private var cancelled = false
+    private var frameIdx = 0
+    private var fillFrame = false
+    private var fpsIdx = 0
+    private var audIdx = 1
+    private var origRatio = ""
+    private val origFill = HashMap<String, Boolean>()
+    private val frameRatios = listOf("", "9:16", "4:5", "1:1", "16:9")
+    private val fpsList = intArrayOf(0, 24, 30)
+    private val audKbps = intArrayOf(128, 192, 256)
 
     private val poll = object : Runnable {
         override fun run() {
@@ -66,6 +77,8 @@ class ExportActivity : Activity() {
             return
         }
         proj = p
+        origRatio = p.ratio
+        for (c in p.clips) origFill[c.id] = c.fill
         content = FrameLayout(this)
         content.setBackgroundColor(C.BG)
         setContentView(content)
@@ -106,6 +119,48 @@ class ExportActivity : Activity() {
         return row
     }
 
+    /** Applies the chosen social-media frame to the in-memory copy of the project (never saved). */
+    private fun applyFrame() {
+        proj.ratio = if (frameRatios[frameIdx].isEmpty()) origRatio else frameRatios[frameIdx]
+        for (c in proj.clips) c.fill = if (fillFrame) true else (origFill[c.id] ?: c.fill)
+    }
+
+    private fun freeBytes(): Long = try {
+        val st = StatFs(cacheDir.absolutePath)
+        st.availableBytes
+    } catch (e: Throwable) { Long.MAX_VALUE }
+
+    private fun neededBytes(): Long {
+        val sz = Geo.outSize(proj, resList[resIdx])
+        val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx)
+        val sec = proj.totalMs() / 1000.0
+        val one = (br / 8.0 + 24000.0) * sec
+        return (one * 2.3).toLong() + 40L * 1048576L
+    }
+
+    private fun frameBox(): View {
+        val v = object : View(this) {
+            override fun onDraw(c: android.graphics.Canvas) {
+                val a = Geo.aspect(proj)
+                val p = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+                val maxW = width - dp(8).toFloat()
+                val maxH = height - dp(8).toFloat()
+                var w = maxH * a
+                var h = maxH
+                if (w > maxW) { w = maxW; h = maxW / a }
+                val l = (width - w) / 2f
+                val t = (height - h) / 2f
+                p.color = 0xFF111111.toInt()
+                c.drawRoundRect(l, t, l + w, t + h, dpf(6f), dpf(6f), p)
+                p.style = android.graphics.Paint.Style.STROKE
+                p.strokeWidth = dpf(2f)
+                p.color = C.ACCENT
+                c.drawRoundRect(l, t, l + w, t + h, dpf(6f), dpf(6f), p)
+            }
+        }
+        return v
+    }
+
     private fun estimate(): String {
         val sz = Geo.outSize(proj, resList[resIdx])
         val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx)
@@ -131,7 +186,49 @@ class ExportActivity : Activity() {
         body.addView(tv(L("وضوح تصویر", "Resolution"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(34)))
         body.addView(chips(resLabels, resIdx) { resIdx = it; info.text = estimate() }, lp(MATCH, dp(44)))
 
+        val frameLabels = listOf(L("اصلی", "Original"), "TikTok / Reels / Shorts 9:16", L("اینستاگرام 4:5", "Instagram 4:5"), L("مربع 1:1", "Square 1:1"), "YouTube / Facebook 16:9")
+        body.addView(tv(L("قالب شبکه‌های اجتماعی", "Social format"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(34)))
+        val frameHolder = FrameLayout(this)
+        val fv = frameBox()
+        frameHolder.addView(fv, fl(dp(64), dp(64), Gravity.CENTER))
+        val chipScroll = android.widget.HorizontalScrollView(this)
+        chipScroll.isHorizontalScrollBarEnabled = false
+        val chipRow = lin(false)
+        val frameChipViews = ArrayList<TextView>()
+        for (i in frameLabels.indices) {
+            val t = tv(frameLabels[i], 12.5f, if (i == frameIdx) Color.BLACK else C.TXT, true)
+            t.setPadding(dp(14), 0, dp(14), 0)
+            t.background = roundedBg(if (i == frameIdx) Color.WHITE else C.CARD, dpf(18f))
+            t.setOnClickListener {
+                frameIdx = i
+                applyFrame()
+                for (j in frameChipViews.indices) {
+                    frameChipViews[j].setTextColor(if (j == i) Color.BLACK else C.TXT)
+                    frameChipViews[j].background = roundedBg(if (j == i) Color.WHITE else C.CARD, dpf(18f))
+                }
+                fv.invalidate()
+                info.text = if (isPhoto) { val z = Geo.outSize(proj, resList[resIdx]); "${z[0]}×${z[1]}" } else estimate()
+            }
+            frameChipViews.add(t)
+            val l = lp(WRAP, dp(40))
+            l.setMargins(dp(3), 0, dp(3), 0)
+            chipRow.addView(t, l)
+        }
+        chipScroll.addView(chipRow)
+        body.addView(chipScroll, lp(MATCH, dp(44)))
+        body.addView(frameHolder, lp(MATCH, dp(70)))
+        body.addView(chips(listOf(L("جا دادن (با حاشیه)", "Fit (bars)"), L("بازکادربندی خودکار (پر کردن)", "Auto reframe (fill)")), if (fillFrame) 1 else 0) {
+            fillFrame = it == 1
+            applyFrame()
+            fv.invalidate()
+            info.text = if (isPhoto) { val z = Geo.outSize(proj, resList[resIdx]); "${z[0]}×${z[1]}" } else estimate()
+        }, lp(MATCH, dp(44)))
+
         if (!isPhoto) {
+            body.addView(tv(L("نرخ فریم", "Frame rate"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(34)))
+            body.addView(chips(listOf(L("اصلی", "Source"), "24 fps", "30 fps"), fpsIdx) { fpsIdx = it }, lp(MATCH, dp(44)))
+            body.addView(tv(L("کیفیت صدا", "Audio quality"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(34)))
+            body.addView(chips(listOf("128 kbps", "192 kbps", "256 kbps"), audIdx) { audIdx = it }, lp(MATCH, dp(44)))
             body.addView(tv(L("کیفیت", "Quality"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(44)))
             body.addView(
                 chips(listOf(L("کم", "Low"), L("متوسط", "Medium"), L("بالا", "High"), L("حداکثر", "Max")), qualIdx) { qualIdx = it; info.text = estimate() },
@@ -154,7 +251,17 @@ class ExportActivity : Activity() {
 
         val go = tv(L("شروع خروجی", "Export"), 16f, Color.WHITE, true)
         go.background = gradBg(C.ACCENT2, C.ACCENT, dpf(26f), android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT)
-        go.setOnClickListener { if (isPhoto) exportPhoto() else startVideo(false) }
+        go.setOnClickListener {
+            applyFrame()
+            if (isPhoto) exportPhoto()
+            else if (freeBytes() < neededBytes()) {
+                val need = neededBytes() / 1048576L
+                val have = freeBytes() / 1048576L
+                Dialogs.confirm(this, L("فضای خالی کم است", "Low storage"),
+                    L("برای خروجی حدود $need مگابایت فضا لازم است ولی فقط $have مگابایت آزاد است. ادامه می‌دهید؟", "About $need MB are needed but only $have MB are free. Continue?"),
+                    L("ادامه", "Continue")) { startVideo(false) }
+            } else startVideo(false)
+        }
         val gl = lp(MATCH, dp(52))
         gl.setMargins(dp(16), dp(8), dp(16), dp(20))
         root.addView(go, gl)
@@ -193,7 +300,7 @@ class ExportActivity : Activity() {
         Bg.run {
             val res: Exporter.Result
             try {
-                res = Exporter.build(this, proj, sz[0], sz[1], safe)
+                res = Exporter.build(this, proj, sz[0], sz[1], safe, fpsList[fpsIdx])
             } catch (e: Throwable) {
                 Bg.ui { showError(L("آماده‌سازی ناموفق بود: ", "Preparation failed: ") + (e.message ?: e.javaClass.simpleName)) }
                 return@run
@@ -210,6 +317,7 @@ class ExportActivity : Activity() {
         try {
             val enc = DefaultEncoderFactory.Builder(this)
                 .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
+                .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(audKbps[audIdx] * 1000).build())
                 .setEnableFallback(true)
                 .build()
             val t = Transformer.Builder(this)

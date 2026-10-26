@@ -84,6 +84,42 @@ object Fonts {
     }
 }
 
+/** Colour keying (green screen / plain background removal) for overlay pictures. */
+object Chroma {
+    private val cache = object : LruCache<String, Bitmap>(48 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+
+    fun key(src: Bitmap, srcKey: String, color: Int, tol: Float, soft: Float): Bitmap {
+        val k = "$srcKey|$color|$tol|$soft"
+        synchronized(cache) { cache.get(k)?.let { return it } }
+        val w = src.width
+        val h = src.height
+        val px = IntArray(w * h)
+        src.getPixels(px, 0, w, 0, 0, w, h)
+        val kr = Color.red(color)
+        val kg = Color.green(color)
+        val kb = Color.blue(color)
+        val sf = Math.max(0.001f, soft)
+        for (i in px.indices) {
+            val v = px[i]
+            val dr = Color.red(v) - kr
+            val dg = Color.green(v) - kg
+            val db = Color.blue(v) - kb
+            val d = Math.sqrt((dr * dr + dg * dg + db * db).toDouble()).toFloat() / 441.67f
+            val f = clampF((d - tol) / sf, 0f, 1f)
+            if (f < 1f) {
+                val a = (Color.alpha(v) * f).toInt()
+                px[i] = Color.argb(a, Color.red(v), Color.green(v), Color.blue(v))
+            }
+        }
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        out.setPixels(px, 0, w, 0, 0, w, h)
+        synchronized(cache) { cache.put(k, out) }
+        return out
+    }
+}
+
 object BmpCache {
     private val cache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
@@ -307,6 +343,8 @@ object Render {
             if (e == null) return floatArrayOf(10f, 10f)
             return floatArrayOf(e.w + pad * 2f, e.h + pad * 1.2f)
         }
+        if (o.kind == "eq") return Eq.size(W)
+        if (o.kind == "comp") return floatArrayOf(W * 0.6f, W * 0.9f)
         val base = W * 0.30f
         if (o.kind == "image") {
             val asp = if (o.imgAspect <= 0f) 1f else o.imgAspect
@@ -319,6 +357,7 @@ object Render {
         val a = animState(o, tMs)
         val alpha = clampF(o.opacity * a.alpha, 0f, 1f)
         if (alpha <= 0.003f) return
+        if (o.kind == "comp") { Comp.draw(c, o, W, H, tMs, alpha); return }
         c.save()
         c.translate((o.cx + a.dx) * W, (o.cy + a.dy) * H)
         c.rotate(o.rot + a.rot)
@@ -326,7 +365,8 @@ object Render {
         c.scale(if (o.flipH) -sc else sc, sc)
         when (o.kind) {
             "text" -> drawText(c, o, W, a, alpha)
-            "image" -> drawImage(c, o, W, alpha)
+            "image" -> drawImage(c, o, W, alpha, tMs)
+            "eq" -> Eq.draw(c, o, W, tMs, alpha)
             else -> drawSticker(c, o, W, alpha)
         }
         c.restore()
@@ -370,8 +410,18 @@ object Render {
         e.fillPaint.clearShadowLayer()
     }
 
-    private fun drawImage(c: Canvas, o: Overlay, W: Float, alpha: Float) {
-        val b = BmpCache.get(o.uri, 1024) ?: return
+    private fun drawImage(c: Canvas, o: Overlay, W: Float, alpha: Float, tMs: Long) {
+        var key = o.uri
+        var b: Bitmap?
+        if (o.nf > 0) {
+            val i = ((Math.max(0L, tMs - o.startMs) * o.fps / 1000L) % o.nf).toInt()
+            key = android.net.Uri.fromFile(java.io.File(o.frames, "f$i.jpg")).toString()
+            b = BmpCache.get(key, 640)
+        } else {
+            b = BmpCache.get(o.uri, 1024)
+        }
+        if (b == null) return
+        if (o.chroma != 0) b = Chroma.key(b, key, o.chroma, o.chromaTol, o.chromaSoft)
         val sz = overlaySize(o, W)
         val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         p.alpha = (alpha * 255f).toInt()
@@ -468,6 +518,9 @@ object Render {
             val rr = Math.min(Wf, r[0] + r[2])
             val bb = Math.min(Hf, r[1] + r[3])
             vr = floatArrayOf(l, t, rr - l, bb - t)
+            val lt = ClipLight.of(clip)
+            if (lt != null) drawLight(c, vr, lt, tMs, ct[1], Wf)
+            if (clip.motion.isNotEmpty()) Motion.drawPost(c, vr, clip, ct[1], Wf)
             val vg = Fx.vignetteOf(clip)
             if (vg > 0.01f) drawVignette(c, vr, vg)
             val gr = Fx.grainOf(clip)
@@ -479,6 +532,7 @@ object Render {
                 if (d.overlay) drawFx(c, f, vr, tMs, Wf)
             }
         }
+        Eq.cur.set(p)
         for (o in p.overlays) {
             if (tMs >= o.startMs && tMs < o.endMs()) drawOverlay(c, o, Wf, Hf, tMs)
         }
@@ -488,12 +542,18 @@ object Render {
         for (f in p.fxs) if (tMs >= f.startMs && tMs < f.endMs()) return true
         for (o in p.overlays) {
             if (tMs >= o.startMs && tMs < o.endMs()) {
+                if (o.kind == "eq" || o.kind == "comp" || (o.kind == "image" && o.nf > 0)) return true
                 if (o.animIn != "none" && tMs - o.startMs < o.animInMs) return true
                 if (o.animOut != "none" && o.endMs() - tMs < o.animOutMs) return true
             }
         }
         val ct = clipTime(p, tMs)
         if (ct[0] >= 0 && Fx.grainOf(p.clips[ct[0].toInt()]) > 0.01f) return true
+        if (ct[0] >= 0 && Motion.hasOverlayPost(p.clips[ct[0].toInt()].motion)) return true
+        if (ct[0] >= 0) {
+            val lt = ClipLight.of(p.clips[ct[0].toInt()])
+            if (lt != null && lt.anim != "none") return true
+        }
         return false
     }
 
@@ -502,6 +562,7 @@ object Render {
         val sb = StringBuilder()
         val ct = clipTime(p, tMs)
         sb.append(ct[0])
+        if (ct[0] >= 0) sb.append(p.clips[ct[0].toInt()].light)
         for (o in p.overlays) if (tMs >= o.startMs && tMs < o.endMs()) sb.append('|').append(o.id).append(o.hashCode())
         return sb.toString()
     }
@@ -715,7 +776,8 @@ object Render {
         val ct = clipTime(p, tMs)
         if (ct[0] >= 0) {
             val c = p.clips[ct[0].toInt()]
-            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f) return false
+            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null) return false
+            if (c.motion.isNotEmpty() && Motion.hasOverlayPost(c.motion)) return false
         }
         return true
     }

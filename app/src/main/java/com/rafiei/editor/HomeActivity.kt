@@ -139,9 +139,72 @@ class HomeActivity : Activity() {
     }
 
     private fun openSettings() {
-        Dialogs.choose(this, L("تنظیمات", "Settings"), listOf("فارسی", "English")) { idx ->
-            Lang.set(this, idx == 0)
-            recreate()
+        val crash = java.io.File(filesDir, "last_crash.txt")
+        val items = ArrayList<String>()
+        items.add("فارسی / دری (پیش‌فرض)")
+        items.add("English")
+        items.add(L("معرفی برنامه به دیگران", "Share this app"))
+        items.add(L("پشتیبان‌گیری از همه پروژه‌ها", "Back up all projects"))
+        items.add(L("بازیابی از فایل پشتیبان", "Restore from backup"))
+        if (crash.exists()) items.add(L("گزارش آخرین خطا (ارسال با اجازه‌ی شما)", "Last error report (shared only if you choose)"))
+        Dialogs.choose(this, L("تنظیمات", "Settings"), items) { idx ->
+            when (idx) {
+                0 -> { Lang.set(this, true); recreate() }
+                1 -> { Lang.set(this, false); recreate() }
+                2 -> {
+                    try {
+                        val i = Intent(Intent.ACTION_SEND)
+                        i.type = "text/plain"
+                        i.putExtra(Intent.EXTRA_TEXT, L("رفیعی ادیتور — ویرایشگر ویدیو و عکس رایگان، بدون واترمارک و بدون تبلیغات.", "Rafiei Editor — a free video and photo editor, no watermark and no ads."))
+                        startActivity(Intent.createChooser(i, L("معرفی برنامه", "Share")))
+                    } catch (e: Exception) { }
+                }
+                3 -> {
+                    val dlg = android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setMessage(L("در حال ساخت فایل پشتیبان…", "Creating backup…")).setCancelable(false).create()
+                    dlg.show()
+                    val ctx = applicationContext
+                    Bg.run {
+                        val where = Backup.create(ctx)
+                        Bg.ui {
+                            dlg.dismiss()
+                            Dialogs.message(this, L("پشتیبان‌گیری", "Backup"), if (where == null) L("ساخت فایل پشتیبان ناموفق بود (فضای خالی را بررسی کنید).", "Backup failed (check free space).") else L("ذخیره شد در: ", "Saved to: ") + where)
+                        }
+                    }
+                }
+                4 -> {
+                    val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    i.addCategory(Intent.CATEGORY_OPENABLE)
+                    i.type = "application/zip"
+                    try { startActivityForResult(i, 301) } catch (e: Exception) { }
+                }
+                else -> {
+                    val txt = try { crash.readText() } catch (e: Exception) { "" }
+                    Dialogs.confirm(this, L("گزارش خطا", "Error report"), txt.take(900) + "\n\n" + L("فقط همین متن (بدون فایل‌های شما) ارسال می‌شود.", "Only this text (none of your files) is sent."), L("ارسال", "Send")) {
+                        try {
+                            val i = Intent(Intent.ACTION_SEND)
+                            i.type = "text/plain"
+                            i.putExtra(Intent.EXTRA_TEXT, txt)
+                            startActivity(Intent.createChooser(i, L("ارسال گزارش", "Send report")))
+                        } catch (e: Exception) { }
+                        crash.delete()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 301 && resultCode == RESULT_OK && data?.data != null) {
+            val uri = data.data!!
+            val ctx = applicationContext
+            Bg.run {
+                val n = Backup.restore(ctx, uri)
+                Bg.ui {
+                    refreshDraftCount()
+                    Dialogs.message(this, L("بازیابی", "Restore"), if (n < 0) L("بازیابی ناموفق بود.", "Restore failed.") else L("$n فایل بازیابی شد.", "$n files restored."))
+                }
+            }
         }
     }
 

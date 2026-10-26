@@ -164,6 +164,8 @@ class Dyn {
     var gr = 1f
     var gg = 1f
     var gb = 1f
+    var sx = 1f
+    var sy = 1f
 }
 
 object Fx {
@@ -260,7 +262,19 @@ object Fx {
         NamedDef("zoom", "زوم", "Zoom"),
         NamedDef("slide", "اسلاید", "Slide"),
         NamedDef("spin", "چرخش", "Spin"),
-        NamedDef("pop", "پاپ", "Pop")
+        NamedDef("pop", "پاپ", "Pop"),
+        NamedDef("slide_r", "اسلاید راست", "Slide right"),
+        NamedDef("slide_u", "اسلاید بالا", "Slide up"),
+        NamedDef("slide_d", "اسلاید پایین", "Slide down"),
+        NamedDef("zoomout", "زوم عقب", "Zoom out"),
+        NamedDef("squeeze", "فشرده افقی", "Squeeze"),
+        NamedDef("squeeze_v", "فشرده عمودی", "Squeeze vertical"),
+        NamedDef("whip", "شلاقی", "Whip"),
+        NamedDef("glitch", "گلیچ", "Glitch"),
+        NamedDef("zoom_spin", "زوم چرخان", "Zoom spin"),
+        NamedDef("punch", "ضربه", "Punch"),
+        NamedDef("shrink", "کوچک‌شدن", "Shrink"),
+        NamedDef("swing", "تاب", "Swing")
     )
 
     val OVERLAY_ANIMS = listOf(
@@ -327,6 +341,14 @@ object Fx {
             "slide_down" -> d.ty += if (isIn) -e else e
             "spin" -> { d.rot += (if (isIn) -e else e) * 180f; d.s *= 1f - 0.5f * e }
             "pop" -> d.s *= Math.max(0.02f, 1f - e)
+            "squeeze" -> { d.sx *= Math.max(0.03f, 1f - e); d.dark += 0.3f * e }
+            "squeeze_v" -> { d.sy *= Math.max(0.03f, 1f - e); d.dark += 0.3f * e }
+            "whip" -> { d.tx += (if (isIn) e else -e) * 1.3f; d.sx *= 1f + 0.9f * e }
+            "glitch" -> { d.tx += Math.sin((e * 47f).toDouble()).toFloat() * e * 0.06f; d.hue += e * 70f; d.dark += 0.25f * e; d.sx *= 1f + 0.1f * e }
+            "zoom_spin" -> { d.rot += (if (isIn) -e else e) * 120f; d.s *= 1f + 0.8f * e; d.dark += 0.6f * e }
+            "punch" -> { d.s *= 1f + 0.35f * e; d.white += 0.5f * e }
+            "shrink" -> { d.s *= Math.max(0.02f, 1f - 0.9f * e); d.dark += 0.4f * e }
+            "swing" -> { d.rot += (if (isIn) e else -e) * 25f; d.tx += (if (isIn) e else -e) * 0.6f; d.dark += 0.2f * e }
         }
     }
 
@@ -338,6 +360,11 @@ object Fx {
             "slide" -> "slide_left"
             "spin" -> "spin"
             "pop" -> "pop"
+            "slide_r" -> "slide_right"
+            "slide_u" -> "slide_up"
+            "slide_d" -> "slide_down"
+            "zoomout" -> "zoom_out"
+            "squeeze", "squeeze_v", "whip", "glitch", "zoom_spin", "punch", "shrink", "swing" -> t
             else -> "none"
         }
     }
@@ -376,6 +403,8 @@ object Fx {
         for (f in p.fxs) {
             if (tg >= f.startMs && tg < f.endMs()) applyFx(d, f, tg)
         }
+        if (c.motion.isNotEmpty()) Motion.applyToDyn(c, lt, d)
+        if (c.kf.isNotEmpty()) Keyframes.applyToDyn(c, lt, d)
         return d
     }
 
@@ -454,10 +483,12 @@ object Fx {
         x.invert(d.invert)
         x.dark(d.dark)
         x.white(d.white)
+        if (Math.abs(d.bright) > 0.001f) x.bright(d.bright)
     }
 
     fun isDynamic(p: Project, i: Int): Boolean {
         val c = p.clips[i]
+        if (c.motion.isNotEmpty() || c.kf.isNotEmpty()) return true
         if (c.animIn != "none" || c.animOut != "none") return true
         if (c.trans != "none" && i > 0) return true
         if (i < p.clips.size - 1 && p.clips[i + 1].trans != "none") return true
@@ -466,17 +497,18 @@ object Fx {
 
     /** scale, tx, ty, rotation for the clip (user zoom/pan included). */
     fun xform(c: Clip, d: Dyn): FloatArray {
-        return floatArrayOf(c.zoom * d.s, c.panX + d.tx, c.panY + d.ty, d.rot)
+        return floatArrayOf(c.zoom * d.s, c.panX + d.tx, c.panY + d.ty, d.rot, d.sx, d.sy)
     }
 
     /** Matrix in normalised device coordinates for Media3's MatrixTransformation. */
-    fun ndcMatrix(scale: Float, tx: Float, ty: Float, rot: Float, aspect: Float): Matrix {
+    fun ndcMatrix(scale: Float, tx: Float, ty: Float, rot: Float, aspect: Float, sx: Float = 1f, sy: Float = 1f): Matrix {
         val m = Matrix()
         if (Math.abs(rot) > 0.001f) {
             m.postScale(aspect, 1f)
             m.postRotate(-rot)
             m.postScale(1f / aspect, 1f)
         }
+        if (Math.abs(sx - 1f) > 0.001f || Math.abs(sy - 1f) > 0.001f) m.postScale(sx, sy)
         m.postScale(scale, scale)
         m.postTranslate(tx * 2f, -ty * 2f)
         return m

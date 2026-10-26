@@ -1,0 +1,247 @@
+package com.rafiei.editor
+
+import android.app.AlertDialog
+import android.content.Intent
+import android.graphics.Color
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.os.Build
+import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import java.io.FileOutputStream
+import java.nio.ByteOrder
+
+/** Automatic subtitles (experimental): the audio is cut into short pieces and each piece goes through the phone's speech recogniser. */
+object AutoSub {
+    /** Decodes the audio of [path] between [fromMs] and [toMs] to 16 kHz mono PCM. */
+    fun decode16k(path: String, fromMs: Long, toMs: Long): ShortArray? {
+        val ex = MediaExtractor()
+        var codec: MediaCodec? = null
+        try {
+            ex.setDataSource(path)
+            var ti = -1
+            var fmt: MediaFormat? = null
+            for (i in 0 until ex.trackCount) {
+                val f = ex.getTrackFormat(i)
+                if ((f.getString(MediaFormat.KEY_MIME) ?: "").startsWith("audio/")) { ti = i; fmt = f; break }
+            }
+            if (ti < 0 || fmt == null) return null
+            ex.selectTrack(ti)
+            ex.seekTo(fromMs * 1000L, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            codec = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
+            codec.configure(fmt, null, null, 0)
+            codec.start()
+            var sr = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            var ch = if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            val out = ArrayList<Short>()
+            val info = MediaCodec.BufferInfo()
+            var inDone = false
+            var outDone = false
+            var pos = 0.0 // position in source samples, used for resampling
+            var next = 0.0
+            var guard = 0
+            while (!outDone) {
+                if (!inDone) {
+                    val ib = codec.dequeueInputBuffer(10000)
+                    if (ib >= 0) {
+                        val buf = codec.getInputBuffer(ib)!!
+                        val n = ex.readSampleData(buf, 0)
+                        if (n < 0 || ex.sampleTime > toMs * 1000L) {
+                            codec.queueInputBuffer(ib, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inDone = true
+                        } else {
+                            codec.queueInputBuffer(ib, 0, n, ex.sampleTime, 0)
+                            ex.advance()
+                        }
+                    }
+                }
+                val ob = codec.dequeueOutputBuffer(info, 10000)
+                if (ob >= 0) {
+                    if (info.size > 0) {
+                        val b = codec.getOutputBuffer(ob)!!
+                        b.position(info.offset)
+                        b.limit(info.offset + info.size)
+                        val sb = b.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                        val step = sr / 16000.0
+                        var i = 0
+                        val total = sb.remaining()
+                        while (i + ch <= total) {
+                            if (pos >= next) {
+                                var s = 0
+                                for (c in 0 until ch) s += sb.get(i + c)
+                                out.add((s / ch).toShort())
+                                next += step
+                            }
+                            pos += 1.0
+                            i += ch
+                        }
+                    }
+                    codec.releaseOutputBuffer(ob, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outDone = true
+                } else if (ob == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val nf = codec.outputFormat
+                    if (nf.containsKey(MediaFormat.KEY_SAMPLE_RATE)) sr = nf.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    if (nf.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) ch = Math.max(1, nf.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
+                } else if (ob == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    guard++
+                    if (inDone && guard > 3000) break
+                }
+            }
+            val arr = ShortArray(out.size)
+            for (i in arr.indices) arr[i] = out[i]
+            return arr
+        } catch (e: Throwable) {
+            return null
+        } finally {
+            try { codec?.stop() } catch (e: Throwable) { }
+            try { codec?.release() } catch (e: Throwable) { }
+            try { ex.release() } catch (e: Throwable) { }
+        }
+    }
+
+    fun rms(a: ShortArray, from: Int, to: Int): Double {
+        var s = 0.0
+        for (i in from until to) s += a[i].toDouble() * a[i]
+        return Math.sqrt(s / Math.max(1, to - from)) / 32768.0
+    }
+
+    /** Recognises one chunk; the callback receives the text or null. Must be called on the main thread. */
+    fun recognize(ctx: android.content.Context, pcm: ShortArray, from: Int, to: Int, lang: String, cb: (String?) -> Unit) {
+        if (Build.VERSION.SDK_INT < 33) { cb(null); return }
+        val rec: SpeechRecognizer? = try {
+            if (SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx)
+            else if (SpeechRecognizer.isRecognitionAvailable(ctx)) SpeechRecognizer.createSpeechRecognizer(ctx) else null
+        } catch (e: Throwable) { null }
+        if (rec == null) { cb(null); return }
+        var finished = false
+        fun finish(t: String?) {
+            if (finished) return
+            finished = true
+            try { rec.destroy() } catch (e: Throwable) { }
+            cb(t)
+        }
+        try {
+            val pipe = ParcelFileDescriptor.createPipe()
+            val writer = Thread {
+                try {
+                    FileOutputStream(pipe[1].fileDescriptor).use { os ->
+                        val bb = java.nio.ByteBuffer.allocate((to - from) * 2).order(ByteOrder.LITTLE_ENDIAN)
+                        for (i in from until to) bb.putShort(pcm[i])
+                        os.write(bb.array())
+                    }
+                } catch (e: Throwable) { }
+                try { pipe[1].close() } catch (e: Throwable) { }
+            }
+            rec.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onError(error: Int) { finish(null) }
+                override fun onResults(results: Bundle?) {
+                    val l = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    finish(l?.firstOrNull())
+                }
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+            val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
+            i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+            i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+            i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 16000)
+            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            rec.startListening(i)
+            writer.start()
+            // safety net: never wait forever
+            Bg.postDelayed(25000L) { finish(null) }
+        } catch (e: Throwable) {
+            finish(null)
+        }
+    }
+}
+
+/** Makes subtitles from the speech in the selected (or first) video clip. */
+fun EditorActivity.openAutoSubPanel() {
+    if (Build.VERSION.SDK_INT < 33) {
+        Dialogs.message(this, L("زیرنویس خودکار", "Auto subtitles"), L("این قابلیت به اندروید ۱۳ یا بالاتر نیاز دارد. می‌توانید از «زیرنویس» یا «فایل SRT» استفاده کنید.", "This needs Android 13 or newer. Use the Subtitle or SRT tools instead."))
+        return
+    }
+    val c = selClip() ?: proj.clips.firstOrNull { !it.isImage && it.hasAudio }
+    if (c == null || c.isImage || !c.hasAudio) { toast(L("کلیپ ویدیویی دارای صدا لازم است.", "A video clip with audio is needed.")); return }
+    if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), EditorActivity.REQ_MIC)
+        toast(L("اجازه‌ی میکروفون را بدهید و دوباره امتحان کنید.", "Allow the microphone, then try again."))
+        return
+    }
+    val langs = listOf("fa-IR" to "فارسی / دری", "en-US" to "English", "ps-AF" to "پشتو", "ar-SA" to "العربية")
+    Dialogs.choose(this, L("زبان گفتار", "Speech language"), langs.map { it.second }) { li ->
+        val lang = langs[li].first
+        val idx = proj.clips.indexOf(c)
+        val clipStart = proj.clipStart(idx)
+        val path = MediaUtil.pathOf(c.uri)
+        val ts = c.trimStart
+        val te = c.trimEnd
+        val speed = c.speed
+        val dlg: AlertDialog = progressDialog(L("در حال خواندن صدا…", "Reading audio…"))
+        Bg.run {
+            val pcm = AutoSub.decode16k(path, ts, te)
+            Bg.ui {
+                if (pcm == null || pcm.size < 16000) {
+                    dlg.dismiss()
+                    toast(L("صدای این کلیپ خوانده نشد.", "Could not read this clip's audio."))
+                } else {
+                    val chunk = 16000 * 6
+                    val total = (pcm.size + chunk - 1) / chunk
+                    val lines = ArrayList<Triple<Long, Long, String>>()
+                    var k = 0
+                    lateinit var step: () -> Unit
+                    step = {
+                        if (k >= total) {
+                            dlg.dismiss()
+                            if (lines.isEmpty()) {
+                                Dialogs.message(this, L("زیرنویس خودکار", "Auto subtitles"), L("گفتاری تشخیص داده نشد. ممکن است بسته‌ی زبان روی گوشی نصب نباشد (تنظیمات گوشی ← زبان و ورودی ← گفتار).", "No speech recognised. The language pack may be missing on this phone."))
+                            } else {
+                                beginChange()
+                                proj.overlays.removeAll { it.kind == "text" && it.glyph == "sub" }
+                                for (l in lines) {
+                                    val o = Overlay()
+                                    o.kind = "text"; o.glyph = "sub"; o.text = l.third
+                                    o.startMs = l.first; o.durMs = Math.max(500L, l.second - l.first)
+                                    o.size = 0.05f; o.cx = 0.5f; o.cy = 0.86f; o.color = Color.WHITE
+                                    o.bgColor = Color.BLACK; o.bgAlpha = 0.45f; o.bold = true
+                                    o.outlineColor = Color.BLACK; o.outlineW = 0.3f
+                                    proj.overlays.add(o)
+                                }
+                                changed()
+                                toast(L("${lines.size} زیرنویس ساخته شد؛ متن و زمان را اصلاح کنید.", "${lines.size} subtitles created; fix text and timing."))
+                                openSubtitlePanel()
+                            }
+                        } else {
+                            val from = k * chunk
+                            val to = Math.min(pcm.size, from + chunk)
+                            dlg.setMessage(L("در حال تشخیص گفتار… ${k + 1} از $total", "Recognising speech… ${k + 1} of $total"))
+                            val t0 = clipStart + ((from / 16f) / speed).toLong()
+                            val t1 = clipStart + ((to / 16f) / speed).toLong()
+                            k++
+                            if (AutoSub.rms(pcm, from, to) < 0.004) step() else {
+                                AutoSub.recognize(applicationContext, pcm, from, to, lang) { t ->
+                                    if (!t.isNullOrBlank()) lines.add(Triple(t0, t1, t.trim()))
+                                    step()
+                                }
+                            }
+                        }
+                    }
+                    step()
+                }
+            }
+        }
+    }
+}

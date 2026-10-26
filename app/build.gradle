@@ -1,5 +1,3 @@
-
-
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
@@ -17,13 +15,22 @@ android {
         versionName "2.0"
     }
 
+    signingConfigs {
+        release {
+            storeFile file("../rafiei.jks")
+            storePassword "rafiei123"
+            keyAlias "rafiei"
+            keyPassword "rafiei123"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
         debug {
-            signingConfig signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 
