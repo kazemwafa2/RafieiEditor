@@ -21,7 +21,15 @@ jobs:
           gradle-version: '8.7'
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --stacktrace > build.log 2>&1
+          result=$?
+          if [ "$result" -ne 0 ]; then
+            grep -n -B 3 -A 5 -E 'e: file:|What went wrong:|Unresolved reference|Expecting|Compilation error|error:' build.log || true
+            tail -n 40 build.log
+          fi
+          exit "$result"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
