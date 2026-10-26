@@ -274,7 +274,8 @@ object Fx {
         NamedDef("zoom_spin", "زوم چرخان", "Zoom spin"),
         NamedDef("punch", "ضربه", "Punch"),
         NamedDef("shrink", "کوچک‌شدن", "Shrink"),
-        NamedDef("swing", "تاب", "Swing")
+        NamedDef("swing", "تاب", "Swing"),
+        NamedDef("blink", "پلک‌زدن", "Blink")
     )
 
     val OVERLAY_ANIMS = listOf(
@@ -342,6 +343,7 @@ object Fx {
             "spin" -> { d.rot += (if (isIn) -e else e) * 180f; d.s *= 1f - 0.5f * e }
             "pop" -> d.s *= Math.max(0.02f, 1f - e)
             "squeeze" -> { d.sx *= Math.max(0.03f, 1f - e); d.dark += 0.3f * e }
+            "blink" -> { d.sy *= Math.max(0.02f, 1f - e * e); d.dark += 0.55f * e; d.white += 0.15f * e }
             "squeeze_v" -> { d.sy *= Math.max(0.03f, 1f - e); d.dark += 0.3f * e }
             "whip" -> { d.tx += (if (isIn) e else -e) * 1.3f; d.sx *= 1f + 0.9f * e }
             "glitch" -> { d.tx += Math.sin((e * 47f).toDouble()).toFloat() * e * 0.06f; d.hue += e * 70f; d.dark += 0.25f * e; d.sx *= 1f + 0.1f * e }
@@ -364,7 +366,7 @@ object Fx {
             "slide_u" -> "slide_up"
             "slide_d" -> "slide_down"
             "zoomout" -> "zoom_out"
-            "squeeze", "squeeze_v", "whip", "glitch", "zoom_spin", "punch", "shrink", "swing" -> t
+            "squeeze", "squeeze_v", "whip", "glitch", "zoom_spin", "punch", "shrink", "swing", "blink" -> t
             else -> "none"
         }
     }

@@ -26,6 +26,9 @@ class ClipLight {
     var anim = "none" // none | sweep | orbit | vert | rotate | pulse
     var spd = 0.5f
     var amp = 0.2f
+    var dir = 1f      // 1 or -1 : motion direction
+    var phase = 0f    // 0..1 start offset of the motion
+    var ampY = -1f    // vertical range (<0 = same as amp)
 
     fun copy(): ClipLight = fromJson(toJson())
 
@@ -35,6 +38,7 @@ class ClipLight {
         o.put("wid", wid.toDouble()); o.put("soft", soft.toDouble()); o.put("rad", rad.toDouble())
         o.put("dark", dark.toDouble()); o.put("glow", glow.toDouble()); o.put("col", color)
         o.put("blur", blur.toDouble()); o.put("an", anim); o.put("spd", spd.toDouble()); o.put("amp", amp.toDouble())
+        o.put("dir", dir.toDouble()); o.put("ph", phase.toDouble()); o.put("ay", ampY.toDouble())
         return o.toString()
     }
 
@@ -43,17 +47,23 @@ class ClipLight {
         val keepA = anim
         val keepS = spd
         val keepP = amp
+        val keepD = dir
+        val keepPh = phase
+        val keepY = ampY
         val b = ClipLight()
         when (id) {
             "beam" -> { b.mode = "beam"; b.lx = 0.6f; b.ly = 0.5f; b.ang = -72f; b.wid = 0.34f; b.soft = 0.06f; b.dark = 0.9f; b.glow = 0.12f; b.color = 0xFFFFE6C8.toInt() }
             "focus" -> { b.mode = "focus"; b.lx = 0.5f; b.ly = 0.42f; b.rad = 0.36f; b.soft = 0.5f; b.blur = 22f; b.dark = 0.25f }
             "strip" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.47f; b.ang = 1.5f; b.wid = 0.07f; b.soft = 0.02f; b.dark = 0.4f; b.glow = 0.9f; b.color = 0xFFFFD89A.toInt() }
             "spot" -> { b.mode = "spot"; b.lx = 0.5f; b.ly = 0.4f; b.rad = 0.5f; b.soft = 0.6f; b.dark = 0.88f; b.glow = 0.1f; b.color = 0xFFFFF0D8.toInt() }
+            "eyes" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.36f; b.ang = 0f; b.wid = 0.12f; b.soft = 0.05f; b.dark = 0.75f; b.glow = 0.55f; b.color = 0xFFFFE9C0.toInt() }
+            "vbeam" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.5f; b.ang = 90f; b.wid = 0.22f; b.soft = 0.05f; b.dark = 0.85f; b.glow = 0.25f; b.color = 0xFFFFE6C8.toInt() }
+            "diag" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.5f; b.ang = -45f; b.wid = 0.2f; b.soft = 0.06f; b.dark = 0.85f; b.glow = 0.3f; b.color = 0xFFFFE6C8.toInt() }
             else -> { b.mode = "off" }
         }
         mode = b.mode; lx = b.lx; ly = b.ly; ang = b.ang; wid = b.wid; soft = b.soft; rad = b.rad
         dark = b.dark; glow = b.glow; color = b.color; blur = b.blur
-        anim = keepA; spd = keepS; amp = keepP
+        anim = keepA; spd = keepS; amp = keepP; dir = keepD; phase = keepPh; ampY = keepY
     }
 
     fun isPreset(id: String): Boolean {
@@ -69,6 +79,9 @@ class ClipLight {
             "beam" to "پرتو اریب",
             "focus" to "تمرکز و حاشیه محو",
             "strip" to "نوار نور",
+            "eyes" to "نوار روی چشم",
+            "vbeam" to "پرتو عمودی",
+            "diag" to "پرتو مورب",
             "spot" to "نورافکن",
             "off" to "بدون نور"
         )
@@ -84,6 +97,7 @@ class ClipLight {
                 l.dark = o.optDouble("dark", 0.9).toFloat(); l.glow = o.optDouble("glow", 0.12).toFloat(); l.color = o.optInt("col", l.color)
                 l.blur = o.optDouble("blur", 22.0).toFloat(); l.anim = o.optString("an", "none")
                 l.spd = o.optDouble("spd", 0.5).toFloat(); l.amp = o.optDouble("amp", 0.2).toFloat()
+                l.dir = o.optDouble("dir", 1.0).toFloat(); l.phase = o.optDouble("ph", 0.0).toFloat(); l.ampY = o.optDouble("ay", -1.0).toFloat()
             } catch (e: Exception) {
             }
             return l
@@ -138,13 +152,32 @@ fun drawLight(c: Canvas, rect: FloatArray, L: ClipLight, tMs: Long, clipRelMs: L
     var rad = L.rad
     var ang = L.ang
     var wid = L.wid
-    val s = L.spd * tl
+    val s = L.spd * tl * L.dir
+    val ph = (L.phase * 2.0 * Math.PI).toFloat()
+    val ax = L.amp
+    val ay = if (L.ampY < 0f) L.amp else L.ampY
+    val t2 = s * 2f + ph
+    fun sn(x: Float) = Math.sin(x.toDouble()).toFloat()
+    fun cs(x: Float) = Math.cos(x.toDouble()).toFloat()
+    // triangle wave -1..1 (linear bounce) and sawtooth wrap -1..1
+    fun tri(x: Float): Float { val k = (x / (2f * Math.PI.toFloat())) % 1f; val u = if (k < 0f) k + 1f else k; return if (u < 0.5f) u * 4f - 1f else 3f - u * 4f }
+    fun saw(x: Float): Float { val k = (x / (2f * Math.PI.toFloat())) % 1f; val u = if (k < 0f) k + 1f else k; return u * 2f - 1f }
     when (L.anim) {
-        "sweep" -> lx += Math.sin((s * 2f).toDouble()).toFloat() * L.amp
-        "orbit" -> { lx += Math.cos((s * 2f).toDouble()).toFloat() * L.amp * 0.7f; ly += Math.sin((s * 2f).toDouble()).toFloat() * L.amp * 0.7f }
-        "vert" -> ly += Math.sin((s * 2f).toDouble()).toFloat() * L.amp
-        "rotate" -> ang += Math.sin((s * 2f).toDouble()).toFloat() * L.amp * 60f
-        "pulse" -> { val k = 1f + 0.25f * Math.sin((s * 3f).toDouble()).toFloat(); rad *= k; wid *= k }
+        "sweep" -> lx += sn(t2) * ax
+        "vert" -> ly += sn(t2) * ay
+        "orbit" -> { lx += cs(t2) * ax * 0.7f; ly += sn(t2) * ay * 0.7f }
+        "diag" -> { lx += sn(t2) * ax; ly += sn(t2) * ay }
+        "diag2" -> { lx += sn(t2) * ax; ly -= sn(t2) * ay }
+        "fig8" -> { lx += sn(t2) * ax; ly += sn(t2 * 2f) * ay * 0.6f }
+        "bounce" -> { lx += tri(t2) * ax; ly += tri(t2 * 1.37f) * ay }
+        "wander" -> { lx += (sn(t2 * 0.9f) + 0.5f * sn(t2 * 2.3f + 1f)) * ax * 0.7f; ly += (cs(t2 * 1.1f) + 0.5f * sn(t2 * 1.9f + 2f)) * ay * 0.7f }
+        "scanx" -> lx += saw(t2) * ax * 1.6f
+        "scany" -> ly += saw(t2) * ay * 1.6f
+        "rotate" -> ang += sn(t2) * ax * 60f
+        "spin" -> ang += s * 60f + L.phase * 360f
+        "orbitspin" -> { lx += cs(t2) * ax * 0.7f; ly += sn(t2) * ay * 0.7f; ang += s * 40f }
+        "pulse" -> { val k = 1f + 0.25f * sn(s * 3f + ph); rad *= k; wid *= k }
+        "breathe" -> { val k = 1f + 0.5f * sn(s * 2f + ph); rad *= k; wid *= k }
     }
     val cx = lx * w
     val cy = ly * h

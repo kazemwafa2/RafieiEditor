@@ -3,4 +3,11 @@ build/
 local.properties
 .idea/
 *.iml
-rafiei.jks
+
+# Signing keys and secrets
+*.jks
+*.keystore
+local.properties
+.env
+*.pem
+*.key

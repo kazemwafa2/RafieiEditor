@@ -48,6 +48,7 @@ class Clip {
     var animOut = "none"
     var animOutMs = 500L
     var light = ""
+    var mask = ""
     var motion = ""
     var motionAmt = 1f
     var kf = ""
@@ -71,6 +72,7 @@ class Clip {
         o.put("tr", trans); o.put("trms", transMs)
         o.put("ai", animIn); o.put("aims", animInMs); o.put("ao", animOut); o.put("aoms", animOutMs)
         if (light.isNotEmpty()) o.put("light", light)
+        if (mask.isNotEmpty()) o.put("mask", mask)
         if (kf.isNotEmpty()) o.put("kf", kf)
         if (motion.isNotEmpty()) { o.put("mo", motion); o.put("moa", motionAmt.toDouble()) }
         return o
@@ -92,6 +94,7 @@ class Clip {
             c.animIn = o.optString("ai", "none"); c.animInMs = o.optLong("aims", 500)
             c.animOut = o.optString("ao", "none"); c.animOutMs = o.optLong("aoms", 500)
             c.light = o.optString("light", "")
+            c.mask = o.optString("mask", "")
             c.kf = o.optString("kf", "")
             c.motion = o.optString("mo", ""); c.motionAmt = o.optDouble("moa", 1.0).toFloat()
             return c
@@ -180,6 +183,7 @@ class Overlay {
     var shadowColor = Color.BLACK
     var bgColor = Color.BLACK
     var bgAlpha = 0f
+    var tfx = "none" // text effect: none | echo | echoh | glass | neon
 
     // sticker / image
     var glyph = ""
@@ -208,7 +212,7 @@ class Overlay {
         o.put("text", text); o.put("font", font); o.put("color", color); o.put("size", size.toDouble())
         o.put("b", bold); o.put("i", italic); o.put("al", align); o.put("sp", spacing.toDouble())
         o.put("oc", outlineColor); o.put("ow", outlineW.toDouble()); o.put("sh", shadow.toDouble()); o.put("shc", shadowColor)
-        o.put("bc", bgColor); o.put("ba", bgAlpha.toDouble())
+        o.put("bc", bgColor); o.put("ba", bgAlpha.toDouble()); if (tfx != "none") o.put("tfx", tfx)
         o.put("glyph", glyph); o.put("uri", uri); o.put("cfg", cfg); o.put("asp", imgAspect.toDouble())
         if (nf > 0) { o.put("frd", frames); o.put("fps", fps); o.put("nf", nf) }
         if (chroma != 0) { o.put("ck", chroma); o.put("ckt", chromaTol.toDouble()); o.put("cks", chromaSoft.toDouble()) }
@@ -228,7 +232,7 @@ class Overlay {
             v.align = o.optInt("al", 1); v.spacing = o.optDouble("sp", 0.0).toFloat()
             v.outlineColor = o.optInt("oc", Color.BLACK); v.outlineW = o.optDouble("ow", 0.0).toFloat()
             v.shadow = o.optDouble("sh", 0.0).toFloat(); v.shadowColor = o.optInt("shc", Color.BLACK)
-            v.bgColor = o.optInt("bc", Color.BLACK); v.bgAlpha = o.optDouble("ba", 0.0).toFloat()
+            v.bgColor = o.optInt("bc", Color.BLACK); v.bgAlpha = o.optDouble("ba", 0.0).toFloat(); v.tfx = o.optString("tfx", "none")
             v.glyph = o.optString("glyph"); v.uri = o.optString("uri"); v.cfg = o.optString("cfg"); v.imgAspect = o.optDouble("asp", 1.0).toFloat()
             v.frames = o.optString("frd"); v.fps = o.optInt("fps", 10); v.nf = o.optInt("nf", 0)
             v.chroma = o.optInt("ck", 0); v.chromaTol = o.optDouble("ckt", 0.3).toFloat(); v.chromaSoft = o.optDouble("cks", 0.12).toFloat()

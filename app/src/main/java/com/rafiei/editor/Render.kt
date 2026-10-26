@@ -364,7 +364,7 @@ object Render {
         val sc = o.scale * a.scale
         c.scale(if (o.flipH) -sc else sc, sc)
         when (o.kind) {
-            "text" -> drawText(c, o, W, a, alpha)
+            "text" -> drawText(c, o, W, a, alpha, tMs)
             "image" -> drawImage(c, o, W, alpha, tMs)
             "eq" -> Eq.draw(c, o, W, tMs, alpha)
             else -> drawSticker(c, o, W, alpha)
@@ -372,7 +372,7 @@ object Render {
         c.restore()
     }
 
-    private fun drawText(c: Canvas, o: Overlay, W: Float, a: AnimState, alpha: Float) {
+    private fun drawText(c: Canvas, o: Overlay, W: Float, a: AnimState, alpha: Float, tMs: Long = 0L) {
         var txt = o.text
         if (a.reveal < 0.999f) {
             val n = Math.round(txt.length * clampF(a.reveal, 0f, 1f))
@@ -400,6 +400,55 @@ object Render {
             e.fillPaint.setShadowLayer(o.size * W * 0.12f * o.shadow + 1f, o.size * W * 0.06f * o.shadow, o.size * W * 0.06f * o.shadow, withAlpha(o.shadowColor, alpha * 0.9f))
         } else {
             e.fillPaint.clearShadowLayer()
+        }
+        val fx = o.tfx
+        val px = o.size * W
+        if (fx == "echo" || fx == "echoh") {
+            // big repeated / echoing text: faded outline copies above and below (or left/right) that slowly breathe
+            val t = (tMs - o.startMs) / 1000f
+            val n = 5
+            val sw = Math.max(1.5f, px * 0.03f)
+            val old = e.strokePaint.strokeWidth
+            e.strokePaint.strokeWidth = sw
+            for (k in n downTo 1) {
+                val breathe = 1f + 0.12f * Math.sin((t * 2.2f - k * 0.5f).toDouble()).toFloat()
+                val off = k * e.h * 0.62f * breathe
+                for (sgn in intArrayOf(-1, 1)) {
+                    c.save()
+                    if (fx == "echo") c.translate(0f, sgn * off) else c.translate(sgn * k * e.w * 0.12f * breathe, 0f)
+                    e.strokePaint.color = withAlpha(o.color, alpha * (0.55f - k * 0.09f))
+                    e.stroke.draw(c)
+                    c.restore()
+                }
+            }
+            e.strokePaint.strokeWidth = old
+        }
+        if (fx == "glass") {
+            val sw = Math.max(2f, px * 0.035f)
+            val old = e.strokePaint.strokeWidth
+            e.strokePaint.strokeWidth = sw
+            e.strokePaint.color = withAlpha(Color.WHITE, alpha * 0.9f)
+            e.stroke.draw(c)
+            e.strokePaint.strokeWidth = old
+            e.fillPaint.color = withAlpha(o.color, alpha * 0.22f)
+            e.fill.draw(c)
+            // gloss: lighter upper half
+            c.save()
+            c.clipRect(0f, 0f, e.w, e.h * 0.45f)
+            e.fillPaint.color = withAlpha(Color.WHITE, alpha * 0.28f)
+            e.fill.draw(c)
+            c.restore()
+            e.fillPaint.clearShadowLayer()
+            return
+        }
+        if (fx == "neon") {
+            e.fillPaint.setShadowLayer(px * 0.35f, 0f, 0f, withAlpha(o.color, alpha))
+            e.fillPaint.color = withAlpha(Color.WHITE, alpha)
+            e.fill.draw(c)
+            e.fillPaint.color = withAlpha(o.color, alpha * 0.9f)
+            e.fill.draw(c)
+            e.fillPaint.clearShadowLayer()
+            return
         }
         if (o.outlineW > 0.01f) {
             e.strokePaint.color = withAlpha(o.outlineColor, alpha)
@@ -518,6 +567,8 @@ object Render {
             val rr = Math.min(Wf, r[0] + r[2])
             val bb = Math.min(Hf, r[1] + r[3])
             vr = floatArrayOf(l, t, rr - l, bb - t)
+            val mk = ClipMask.of(clip)
+            if (mk != null) drawMask(c, vr, mk, ct[1])
             val lt = ClipLight.of(clip)
             if (lt != null) drawLight(c, vr, lt, tMs, ct[1], Wf)
             if (clip.motion.isNotEmpty()) Motion.drawPost(c, vr, clip, ct[1], Wf)
@@ -542,7 +593,7 @@ object Render {
         for (f in p.fxs) if (tMs >= f.startMs && tMs < f.endMs()) return true
         for (o in p.overlays) {
             if (tMs >= o.startMs && tMs < o.endMs()) {
-                if (o.kind == "eq" || o.kind == "comp" || (o.kind == "image" && o.nf > 0)) return true
+                if (o.kind == "eq" || o.kind == "comp" || (o.kind == "image" && o.nf > 0) || (o.kind == "text" && (o.tfx == "echo" || o.tfx == "echoh"))) return true
                 if (o.animIn != "none" && tMs - o.startMs < o.animInMs) return true
                 if (o.animOut != "none" && o.endMs() - tMs < o.animOutMs) return true
             }
@@ -553,6 +604,8 @@ object Render {
         if (ct[0] >= 0) {
             val lt = ClipLight.of(p.clips[ct[0].toInt()])
             if (lt != null && lt.anim != "none") return true
+            val mk = ClipMask.of(p.clips[ct[0].toInt()])
+            if (mk != null && mk.anim != "none") return true
         }
         return false
     }
@@ -562,7 +615,7 @@ object Render {
         val sb = StringBuilder()
         val ct = clipTime(p, tMs)
         sb.append(ct[0])
-        if (ct[0] >= 0) sb.append(p.clips[ct[0].toInt()].light)
+        if (ct[0] >= 0) sb.append(p.clips[ct[0].toInt()].light).append(p.clips[ct[0].toInt()].mask)
         for (o in p.overlays) if (tMs >= o.startMs && tMs < o.endMs()) sb.append('|').append(o.id).append(o.hashCode())
         return sb.toString()
     }
@@ -776,7 +829,7 @@ object Render {
         val ct = clipTime(p, tMs)
         if (ct[0] >= 0) {
             val c = p.clips[ct[0].toInt()]
-            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null) return false
+            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null || ClipMask.of(c) != null) return false
             if (c.motion.isNotEmpty() && Motion.hasOverlayPost(c.motion)) return false
         }
         return true

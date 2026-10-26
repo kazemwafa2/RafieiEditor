@@ -46,12 +46,10 @@ class ExportActivity : Activity() {
     private var frameIdx = 0
     private var fillFrame = false
     private var fpsIdx = 0
-    private var audIdx = 1
     private var origRatio = ""
     private val origFill = HashMap<String, Boolean>()
     private val frameRatios = listOf("", "9:16", "4:5", "1:1", "16:9")
     private val fpsList = intArrayOf(0, 24, 30)
-    private val audKbps = intArrayOf(128, 192, 256)
 
     private val poll = object : Runnable {
         override fun run() {
@@ -226,8 +224,6 @@ class ExportActivity : Activity() {
         if (!isPhoto) {
             body.addView(tv(L("نرخ فریم", "Frame rate"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(34)))
             body.addView(chips(listOf(L("اصلی", "Source"), "24 fps", "30 fps"), fpsIdx) { fpsIdx = it }, lp(MATCH, dp(44)))
-            body.addView(tv(L("کیفیت صدا", "Audio quality"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(34)))
-            body.addView(chips(listOf("128 kbps", "192 kbps", "256 kbps"), audIdx) { audIdx = it }, lp(MATCH, dp(44)))
             body.addView(tv(L("کیفیت", "Quality"), 14f, C.TXT, true, Gravity.START or Gravity.CENTER_VERTICAL), lp(MATCH, dp(44)))
             body.addView(
                 chips(listOf(L("کم", "Low"), L("متوسط", "Medium"), L("بالا", "High"), L("حداکثر", "Max")), qualIdx) { qualIdx = it; info.text = estimate() },

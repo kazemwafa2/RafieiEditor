@@ -15,12 +15,25 @@ android {
         versionName "2.0"
     }
 
+    def ksFile = rootProject.file("rafiei.jks")
+    signingConfigs {
+        release {
+            if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword "rafiei123"
+                keyAlias "rafiei"
+                keyPassword "rafiei123"
+            }
+        }
+    }
 
     buildTypes {
         release {
             minifyEnabled false
+            signingConfig ksFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
         debug {
+            signingConfig ksFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
     }
 

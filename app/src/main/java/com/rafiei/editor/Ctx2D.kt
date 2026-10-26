@@ -54,7 +54,7 @@ class Grad(private val linear: Boolean, private val a: FloatArray) {
             val r1 = Math.max(0.01f, a[5])
             val r0 = clampF(a[2], 0f, r1 * 0.999f)
             if (Build.VERSION.SDK_INT >= 31 && (Math.abs(a[0] - a[3]) > 0.5f || Math.abs(a[1] - a[4]) > 0.5f)) {
-                RadialGradient(a[0], a[1], r0, a[3], a[4], r1, LongArray(cs.size) { Color.pack(cs[it]) }, ps, Shader.TileMode.CLAMP)
+                RadialGradient(a[0], a[1], r0, a[3], a[4], r1, LongArray(cs.size) { i -> Color.pack(cs[i]) }, ps, Shader.TileMode.CLAMP)
             } else if (r0 <= 0.001f) {
                 RadialGradient(a[3], a[4], r1, cs, ps, Shader.TileMode.CLAMP)
             } else {

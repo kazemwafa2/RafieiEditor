@@ -509,6 +509,7 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         items.add(ToolItem("collage", L("کلاژ متحرک", "Photo comp")) { openCompPanel(null) })
         items.add(ToolItem("anim", L("حرکت", "Motion")) { openMotionPanel() })
         items.add(ToolItem("wand", L("استودیو نور", "Light")) { openLightPanel() })
+        items.add(ToolItem("crop", L("ماسک", "Mask")) { openMaskPanel() })
         items.add(ToolItem("font", L("زیرنویس", "Subtitle")) { openSubtitlePanel() })
         items.add(ToolItem("import", L("فایل SRT", "SRT")) { openSrtMenu() })
         items.add(ToolItem("mic", L("زیرنویس خودکار", "Auto subs")) { openAutoSubPanel() })
@@ -543,6 +544,7 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         items.add(ToolItem("adjust", L("تنظیم", "Adjust")) { openFilterPanel(1) })
         items.add(ToolItem("wand", L("حرکت عکس", "Motion")) { openMotionPanel() })
         items.add(ToolItem("effect", L("نور", "Light")) { openLightPanel() })
+        items.add(ToolItem("crop", L("ماسک", "Mask")) { openMaskPanel() })
         if (!isPhoto) {
             items.add(ToolItem("copy", L("کپی", "Duplicate")) { duplicateClip() })
             if (!c.isImage) items.add(ToolItem("freeze", L("توقف تصویر", "Freeze")) { freezeFrame() })

@@ -109,20 +109,49 @@ object AutoSub {
         return Math.sqrt(s / Math.max(1, to - from)) / 32768.0
     }
 
-    /** Recognises one chunk; the callback receives the text or null. Must be called on the main thread. */
+    /** Last error code reported by a recogniser (for the final message). */
+    @Volatile var lastError = 0
+    /** Online (server) recognition only with the user's explicit consent for this run. */
+    @Volatile var allowOnline = false
+
+    /**
+     * Recognises one chunk; the callback receives the text or null. Must be called on the main thread.
+     * Tries the on-device recogniser first and falls back to the system (Google) recogniser when it is missing,
+     * lacks the language pack, or fails.
+     */
     fun recognize(ctx: android.content.Context, pcm: ShortArray, from: Int, to: Int, lang: String, cb: (String?) -> Unit) {
         if (Build.VERSION.SDK_INT < 33) { cb(null); return }
+        val modes = ArrayList<Boolean>()
+        try { if (SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) modes.add(true) } catch (e: Throwable) { }
+        if (allowOnline) modes.add(false)
+        if (modes.isEmpty()) { lastError = 5; cb(null); return }
+        fun attempt(i: Int) {
+            if (i >= modes.size) { cb(null); return }
+            one(ctx, pcm, from, to, lang, modes[i]) { t, err ->
+                if (!t.isNullOrBlank()) cb(t)
+                else {
+                    if (err != 0) lastError = err
+                    // 6 = speech timeout, 7 = no match: genuinely nothing recognised; others -> try the next recogniser
+                    if (err == 0 || err == 6 || err == 7) { if (i + 1 < modes.size && err == 7) attempt(i + 1) else cb(null) }
+                    else attempt(i + 1)
+                }
+            }
+        }
+        attempt(0)
+    }
+
+    private fun one(ctx: android.content.Context, pcm: ShortArray, from: Int, to: Int, lang: String, onDevice: Boolean, cb: (String?, Int) -> Unit) {
         val rec: SpeechRecognizer? = try {
-            if (SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx)
+            if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx)
             else if (SpeechRecognizer.isRecognitionAvailable(ctx)) SpeechRecognizer.createSpeechRecognizer(ctx) else null
         } catch (e: Throwable) { null }
-        if (rec == null) { cb(null); return }
+        if (rec == null) { cb(null, 5); return }
         var finished = false
-        fun finish(t: String?) {
+        fun finish(t: String?, err: Int) {
             if (finished) return
             finished = true
             try { rec.destroy() } catch (e: Throwable) { }
-            cb(t)
+            cb(t, err)
         }
         try {
             val pipe = ParcelFileDescriptor.createPipe()
@@ -142,10 +171,10 @@ object AutoSub {
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
-                override fun onError(error: Int) { finish(null) }
+                override fun onError(error: Int) { finish(null, if (error == 0) -1 else error) }
                 override fun onResults(results: Bundle?) {
                     val l = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    finish(l?.firstOrNull())
+                    finish(l?.firstOrNull(), 0)
                 }
                 override fun onPartialResults(partialResults: Bundle?) {}
                 override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -153,6 +182,9 @@ object AutoSub {
             val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, lang)
+            i.putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
+            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
             i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
             i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
@@ -160,11 +192,17 @@ object AutoSub {
             i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             rec.startListening(i)
             writer.start()
-            // safety net: never wait forever
-            Bg.postDelayed(25000L) { finish(null) }
+            Bg.postDelayed(20000L) { finish(null, 3) }
         } catch (e: Throwable) {
-            finish(null)
+            finish(null, 5)
         }
+    }
+
+    fun errName(code: Int): String = when (code) {
+        1 -> "ERROR_NETWORK_TIMEOUT"; 2 -> "ERROR_NETWORK"; 3 -> "ERROR_AUDIO"; 4 -> "ERROR_SERVER"; 5 -> "ERROR_CLIENT / recogniser missing"
+        6 -> "ERROR_SPEECH_TIMEOUT"; 7 -> "ERROR_NO_MATCH"; 8 -> "ERROR_RECOGNIZER_BUSY"; 9 -> "ERROR_INSUFFICIENT_PERMISSIONS"
+        10 -> "ERROR_TOO_MANY_REQUESTS"; 11 -> "ERROR_SERVER_DISCONNECTED"; 12 -> "ERROR_LANGUAGE_NOT_SUPPORTED"; 13 -> "ERROR_LANGUAGE_UNAVAILABLE"
+        else -> "code $code"
     }
 }
 
@@ -181,9 +219,17 @@ fun EditorActivity.openAutoSubPanel() {
         toast(L("اجازه‌ی میکروفون را بدهید و دوباره امتحان کنید.", "Allow the microphone, then try again."))
         return
     }
-    val langs = listOf("fa-IR" to "فارسی / دری", "en-US" to "English", "ps-AF" to "پشتو", "ar-SA" to "العربية")
+    Dialogs.choose(this, L("روش تشخیص گفتار", "Recognition mode"), listOf(
+        L("فقط آفلاین (روی همین گوشی، چیزی ارسال نمی‌شود)", "Offline only (nothing is sent)"),
+        L("اجازه به سرویس آنلاین گوگل (ممکن است صدا به سرور ارسال شود)", "Allow Google online service (audio may be sent)")
+    )) { mi ->
+    AutoSub.allowOnline = mi == 1
+    val langs = listOf("auto" to "تشخیص خودکار زبان", "fa-IR" to "فارسی / دری", "en-US" to "English", "ps-AF" to "پشتو", "ar-SA" to "العربية", "tr-TR" to "Türkçe", "ur-PK" to "اردو", "hi-IN" to "हिन्दी", "ru-RU" to "Русский")
     Dialogs.choose(this, L("زبان گفتار", "Speech language"), langs.map { it.second }) { li ->
-        val lang = langs[li].first
+        var lang = langs[li].first
+        val autoLang = lang == "auto"
+        if (autoLang) lang = "fa-IR"
+        AutoSub.lastError = 0
         val idx = proj.clips.indexOf(c)
         val clipStart = proj.clipStart(idx)
         val path = MediaUtil.pathOf(c.uri)
@@ -207,7 +253,7 @@ fun EditorActivity.openAutoSubPanel() {
                         if (k >= total) {
                             dlg.dismiss()
                             if (lines.isEmpty()) {
-                                Dialogs.message(this, L("زیرنویس خودکار", "Auto subtitles"), L("گفتاری تشخیص داده نشد. ممکن است بسته‌ی زبان روی گوشی نصب نباشد (تنظیمات گوشی ← زبان و ورودی ← گفتار).", "No speech recognised. The language pack may be missing on this phone."))
+                                Dialogs.message(this, L("زیرنویس خودکار", "Auto subtitles"), L("گفتاری تشخیص داده نشد.\nدلیل فنی: " + AutoSub.errName(AutoSub.lastError) + "\n• بسته‌ی زبان را نصب کنید: تنظیمات گوشی ← برنامه‌ها ← Google ← زبان‌های گفتار (دانلود فارسی/انگلیسی).\n• برنامه‌ی «Google» یا «Speech Services by Google» باید فعال و به‌روز باشد.\n• اینترنت را روشن کنید (گاهی تشخیص آنلاین لازم است).\n• صدای واضح‌تر و بدون موسیقی بهتر تشخیص داده می‌شود.\nدر غیر این صورت از «فایل SRT» استفاده کنید.", "No speech recognised.\nTechnical reason: " + AutoSub.errName(AutoSub.lastError) + "\nInstall the language pack (Google app > speech languages), keep Speech Services updated, turn on internet, or use the SRT tool."))
                             } else {
                                 beginChange()
                                 proj.overlays.removeAll { it.kind == "text" && it.glyph == "sub" }
@@ -232,9 +278,23 @@ fun EditorActivity.openAutoSubPanel() {
                             val t1 = clipStart + ((to / 16f) / speed).toLong()
                             k++
                             if (AutoSub.rms(pcm, from, to) < 0.004) step() else {
-                                AutoSub.recognize(applicationContext, pcm, from, to, lang) { t ->
+                                fun got(t: String?) {
                                     if (!t.isNullOrBlank()) lines.add(Triple(t0, t1, t.trim()))
                                     step()
+                                }
+                                if (autoLang && lines.isEmpty()) {
+                                    // language not known yet: try each language on the first spoken piece, keep the one that works
+                                    val cand = listOf("fa-IR", "en-US", "ps-AF", "ar-SA", "tr-TR", "ur-PK", "hi-IN", "ru-RU")
+                                    fun tryLang(j: Int) {
+                                        if (j >= cand.size) { got(null); return }
+                                        dlg.setMessage(L("در حال شناسایی زبان… (${cand[j]})", "Detecting language… (${cand[j]})"))
+                                        AutoSub.recognize(applicationContext, pcm, from, to, cand[j]) { t ->
+                                            if (!t.isNullOrBlank()) { lang = cand[j]; got(t) } else tryLang(j + 1)
+                                        }
+                                    }
+                                    tryLang(0)
+                                } else {
+                                    AutoSub.recognize(applicationContext, pcm, from, to, lang) { t -> got(t) }
                                 }
                             }
                         }
@@ -243,5 +303,6 @@ fun EditorActivity.openAutoSubPanel() {
                 }
             }
         }
+    }
     }
 }

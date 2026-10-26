@@ -146,6 +146,8 @@ class HomeActivity : Activity() {
         items.add(L("معرفی برنامه به دیگران", "Share this app"))
         items.add(L("پشتیبان‌گیری از همه پروژه‌ها", "Back up all projects"))
         items.add(L("بازیابی از فایل پشتیبان", "Restore from backup"))
+        items.add(L("بانک زبان‌ها (هزارگی و ...)", "Language bank"))
+        items.add(L("بسته‌ها (فونت) — دانلود اختیاری", "Packs (fonts) — optional download"))
         if (crash.exists()) items.add(L("گزارش آخرین خطا (ارسال با اجازه‌ی شما)", "Last error report (shared only if you choose)"))
         Dialogs.choose(this, L("تنظیمات", "Settings"), items) { idx ->
             when (idx) {
@@ -177,6 +179,8 @@ class HomeActivity : Activity() {
                     i.type = "application/zip"
                     try { startActivityForResult(i, 301) } catch (e: Exception) { }
                 }
+                5 -> openLangBank()
+                6 -> openPackManager()
                 else -> {
                     val txt = try { crash.readText() } catch (e: Exception) { "" }
                     Dialogs.confirm(this, L("گزارش خطا", "Error report"), txt.take(900) + "\n\n" + L("فقط همین متن (بدون فایل‌های شما) ارسال می‌شود.", "Only this text (none of your files) is sent."), L("ارسال", "Send")) {

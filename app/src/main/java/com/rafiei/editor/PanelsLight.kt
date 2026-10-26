@@ -77,8 +77,18 @@ private val LIGHT_ANIMS = listOf(
     "sweep" to ("رفت‌وبرگشت افقی" to "Sweep"),
     "vert" to ("بالا و پایین" to "Up / down"),
     "orbit" to ("چرخش دایره‌ای" to "Orbit"),
+    "diag" to ("مورب ↗" to "Diagonal ↗"),
+    "diag2" to ("مورب ↘" to "Diagonal ↘"),
+    "fig8" to ("عدد ۸" to "Figure 8"),
+    "bounce" to ("پرش در کادر" to "Bounce"),
+    "wander" to ("حرکت آزاد" to "Wander"),
+    "scanx" to ("اسکن افقی" to "Scan X"),
+    "scany" to ("اسکن عمودی" to "Scan Y"),
     "rotate" to ("نوسان زاویه" to "Swing"),
-    "pulse" to ("تپش" to "Pulse")
+    "spin" to ("چرخش پرتو" to "Spin"),
+    "orbitspin" to ("دایره + چرخش" to "Orbit + spin"),
+    "pulse" to ("تپش" to "Pulse"),
+    "breathe" to ("تنفس اندازه" to "Breathe")
 )
 
 /** Studio light ("نور") of the selected clip. */
@@ -134,7 +144,17 @@ fun EditorActivity.openLightPanel() {
             }, lp(MATCH, WRAP))
             if (light.anim != "none") {
                 inner.addView(slider(L("سرعت", "Speed"), 10f, 300f, light.spd * 100f, { fmtS(it / 100f) }) { light.spd = it / 100f }, lp(MATCH, WRAP))
-                inner.addView(slider(L("دامنه", "Range"), 2f, 60f, light.amp * 100f, { Math.round(it).toString() }) { light.amp = it / 100f }, lp(MATCH, WRAP))
+                inner.addView(slider(L("دامنه افقی", "Range X"), 2f, 80f, light.amp * 100f, { Math.round(it).toString() }) { light.amp = it / 100f }, lp(MATCH, WRAP))
+                inner.addView(slider(L("دامنه عمودی", "Range Y"), 2f, 80f, (if (light.ampY < 0f) light.amp else light.ampY) * 100f, { Math.round(it).toString() }) { light.ampY = it / 100f }, lp(MATCH, WRAP))
+                inner.addView(slider(L("نقطه شروع حرکت", "Start phase"), 0f, 100f, light.phase * 100f, ::fmtP2) { light.phase = it / 100f }, lp(MATCH, WRAP))
+                val dw = FrameLayout(this)
+                dw.setPadding(dp(10), dp(4), dp(10), dp(2))
+                dw.addView(ltPill(L("جهت حرکت: " + (if (light.dir > 0) "عادی" else "معکوس"), "Direction: " + (if (light.dir > 0) "normal" else "reverse")), true) {
+                    light.dir = -light.dir
+                    push()
+                    build()
+                }, FrameLayout.LayoutParams(WRAP, WRAP))
+                inner.addView(dw, lp(MATCH, WRAP))
             }
             val w = FrameLayout(this)
             w.setPadding(dp(10), dp(4), dp(10), dp(2))
@@ -246,6 +266,28 @@ fun EditorActivity.openSubtitlePanel() {
             }
             val x = ltEdit("", ln.text, false)
             x.onText { s -> ln.text = s; rebuild() }
+            val menu = ltPill("⋮") {
+                Dialogs.choose(this, L("خط زیرنویس", "Subtitle line"), listOf(
+                    L("کپی همین خط", "Duplicate"), L("تقسیم به دو خط (از وسط)", "Split in two"),
+                    L("ادغام با خط بعدی", "Merge with next"), L("حذف", "Delete"))) { k ->
+                    when (k) {
+                        0 -> lines.add(idx + 1, SubLine(if (ln.startMs >= 0) ln.startMs + 1000L else -1L, ln.text))
+                        1 -> {
+                            val w = ln.text.trim().split(" ")
+                            val h = Math.max(1, w.size / 2)
+                            if (w.size > 1) {
+                                val nextT = if (idx + 1 < lines.size && lines[idx + 1].startMs > ln.startMs) lines[idx + 1].startMs else ln.startMs + 3000L
+                                val mid = if (ln.startMs >= 0) (ln.startMs + nextT) / 2 else -1L
+                                ln.text = w.subList(0, h).joinToString(" ")
+                                lines.add(idx + 1, SubLine(mid, w.subList(h, w.size).joinToString(" ")))
+                            }
+                        }
+                        2 -> if (idx + 1 < lines.size) { ln.text = ln.text + " " + lines[idx + 1].text; lines.removeAt(idx + 1) }
+                        3 -> lines.removeAt(idx)
+                    }
+                    rebuild(); refreshRows()
+                }
+            }
             val go = ltPill("▶") {
                 if (ln.startMs >= 0) {
                     engine.pause()
@@ -259,6 +301,7 @@ fun EditorActivity.openSubtitlePanel() {
             val lg = lp(WRAP, WRAP)
             lg.leftMargin = dp(6)
             r.addView(go, lg)
+            r.addView(menu, lp(WRAP, WRAP).also { it.leftMargin = dp(4) })
             rowsHost.addView(r, lp(MATCH, WRAP))
             if (idx > 200) break
         }
@@ -376,6 +419,41 @@ fun EditorActivity.openSubtitlePanel() {
     inner.addView(ColorRow(this, color) { c2 -> color = c2; restyle() }, lp(MATCH, WRAP))
     val fonts = Fonts.BUILTIN + Fonts.imported(this)
     inner.addView(ChipRow(this, fonts.map { Fonts.displayName(it) }, Math.max(0, fonts.indexOf(font))) { i -> font = fonts[i]; restyle() }, lp(MATCH, WRAP))
+
+    // saved favourite looks
+    val prefs = getSharedPreferences("subtpl", 0)
+    fun tpls(): org.json.JSONArray = try { org.json.JSONArray(prefs.getString("list", "[]")) } catch (e: Exception) { org.json.JSONArray() }
+    inner.addView(ltCaption(L("قالب‌های موردعلاقه", "Saved styles")), lp(MATCH, WRAP))
+    val ta = tpls()
+    val tNames = ArrayList<String>()
+    tNames.add(L("＋ ذخیرهٔ ظاهر فعلی", "+ Save current look"))
+    for (i in 0 until ta.length()) tNames.add(ta.getJSONObject(i).optString("n"))
+    val tRow = ChipRow(this, tNames, -1) { i ->
+        if (i == 0) {
+            Dialogs.input(this, L("نام قالب", "Style name"), L("قالب ", "Style ") + (ta.length() + 1)) { nm ->
+                val o = org.json.JSONObject()
+                o.put("n", nm.ifBlank { "style" }); o.put("size", size.toDouble()); o.put("cx", cx.toDouble()); o.put("cy", cy.toDouble())
+                o.put("color", color); o.put("bg", bgA.toDouble()); o.put("font", font)
+                val nl = tpls(); nl.put(o)
+                prefs.edit().putString("list", nl.toString()).apply()
+                toast(L("قالب ذخیره شد", "Style saved"))
+                openSubtitlePanel()
+            }
+        } else {
+            val o = ta.getJSONObject(i - 1)
+            size = o.optDouble("size", 0.05).toFloat(); cx = o.optDouble("cx", 0.5).toFloat(); cy = o.optDouble("cy", 0.86).toFloat()
+            color = o.optInt("color", Color.WHITE); bgA = o.optDouble("bg", 0.45).toFloat(); font = o.optString("font", "sans")
+            restyle()
+            openSubtitlePanel()
+        }
+    }
+    inner.addView(tRow, lp(MATCH, WRAP))
+    if (ta.length() > 0) {
+        val dw = FrameLayout(this)
+        dw.setPadding(dp(10), dp(2), dp(10), dp(2))
+        dw.addView(ltPill(L("حذف همهٔ قالب‌ها", "Delete saved styles")) { prefs.edit().putString("list", "[]").apply(); openSubtitlePanel() }, FrameLayout.LayoutParams(WRAP, WRAP))
+        inner.addView(dw, lp(MATCH, WRAP))
+    }
 
     inner.addView(ltCaption(L("خط‌ها و زمان‌ها (ثانیه)", "Lines and times (seconds)")), lp(MATCH, WRAP))
     rowsHost = lin(true)

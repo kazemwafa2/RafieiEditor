@@ -302,7 +302,8 @@ object Exporter {
         }
         if (fps > 0) {
             try {
-                compEffects.add(androidx.media3.effect.FrameDropEffect.createDefaultFrameDropEffect(fps.toFloat()))
+                val m = Class.forName("androidx.media3.effect.FrameDropEffect").getMethod("createDefaultFrameDropEffect", java.lang.Float.TYPE)
+                compEffects.add(m.invoke(null, fps.toFloat()) as Effect)
             } catch (e: Throwable) {
             }
         }
@@ -314,7 +315,7 @@ object Exporter {
         if (p.overlays.isNotEmpty()) return true
         for (f in p.fxs) if (Fx.fxDef(f.fx).overlay) return true
         for (c in p.clips) {
-            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null) return true
+            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null || ClipMask.of(c) != null) return true
             if (c.motion.isNotEmpty() && Motion.hasOverlayPost(c.motion)) return true
             if (!c.fill) {
                 val r = Geo.clipRect(c, W.toFloat(), H.toFloat())

@@ -21,6 +21,7 @@ object Eq {
         l.add(EqAbRing())
         l.add(EqTkRing())
         lay["classic"]?.let { l.add(it) }
+        l.addAll(eqVizTemplates())
         l.addAll(eqImageTemplates())
         l
     }
