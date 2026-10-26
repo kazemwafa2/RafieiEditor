@@ -15,22 +15,12 @@ android {
         versionName "2.0"
     }
 
-    signingConfigs {
-        release {
-            storeFile file("../rafiei.jks")
-            storePassword "rafiei123"
-            keyAlias "rafiei"
-            keyPassword "rafiei123"
-        }
-    }
 
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.release
         }
         debug {
-            signingConfig signingConfigs.release
         }
     }
 

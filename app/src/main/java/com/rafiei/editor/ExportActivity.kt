@@ -18,7 +18,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.os.StatFs
 import androidx.media3.common.MimeTypes
-import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.ExportException
@@ -317,7 +316,6 @@ class ExportActivity : Activity() {
         try {
             val enc = DefaultEncoderFactory.Builder(this)
                 .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
-                .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(audKbps[audIdx] * 1000).build())
                 .setEnableFallback(true)
                 .build()
             val t = Transformer.Builder(this)
