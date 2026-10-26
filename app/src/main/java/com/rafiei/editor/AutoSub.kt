@@ -198,6 +198,49 @@ object AutoSub {
         }
     }
 
+    /** Callback state: 0 = installed (or unknown), 1 = supported but pack not installed, 2 = not supported offline. */
+    fun checkOffline(ctx: android.content.Context, lang: String, cb: (Int, List<String>) -> Unit) {
+        if (Build.VERSION.SDK_INT < 33) { cb(0, emptyList()); return }
+        try {
+            if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) { cb(2, emptyList()); return }
+            val rec = SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx)
+            val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            var done = false
+            fun fin(st: Int, l: List<String>) { if (done) return; done = true; try { rec.destroy() } catch (e: Throwable) { }; Bg.ui { cb(st, l) } }
+            rec.checkRecognitionSupport(i, java.util.concurrent.Executors.newSingleThreadExecutor(), object : android.speech.RecognitionSupportCallback {
+                override fun onSupportResult(s: android.speech.RecognitionSupport) {
+                    val inst = s.installedOnDeviceLanguages
+                    val sup = s.supportedOnDeviceLanguages
+                    val pend = s.pendingOnDeviceLanguages
+                    val pre = lang.substringBefore('-').lowercase()
+                    val has = { l: List<String> -> l.any { it.lowercase().startsWith(pre) } }
+                    when {
+                        has(inst) -> fin(0, inst)
+                        has(sup) || has(pend) -> fin(1, inst)
+                        else -> fin(2, inst)
+                    }
+                }
+                override fun onError(error: Int) { fin(0, emptyList()) }
+            })
+            Bg.postDelayed(6000L) { fin(0, emptyList()) }
+        } catch (e: Throwable) {
+            cb(0, emptyList())
+        }
+    }
+
+    fun downloadPack(ctx: android.content.Context, lang: String) {
+        try {
+            val rec = SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx)
+            val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            rec.triggerModelDownload(i)
+        } catch (e: Throwable) {
+        }
+    }
+
     fun errName(code: Int): String = when (code) {
         1 -> "ERROR_NETWORK_TIMEOUT"; 2 -> "ERROR_NETWORK"; 3 -> "ERROR_AUDIO"; 4 -> "ERROR_SERVER"; 5 -> "ERROR_CLIENT / recogniser missing"
         6 -> "ERROR_SPEECH_TIMEOUT"; 7 -> "ERROR_NO_MATCH"; 8 -> "ERROR_RECOGNIZER_BUSY"; 9 -> "ERROR_INSUFFICIENT_PERMISSIONS"
@@ -230,6 +273,7 @@ fun EditorActivity.openAutoSubPanel() {
         val autoLang = lang == "auto"
         if (autoLang) lang = "fa-IR"
         AutoSub.lastError = 0
+        fun proceed() {
         val idx = proj.clips.indexOf(c)
         val clipStart = proj.clipStart(idx)
         val path = MediaUtil.pathOf(c.uri)
@@ -253,7 +297,11 @@ fun EditorActivity.openAutoSubPanel() {
                         if (k >= total) {
                             dlg.dismiss()
                             if (lines.isEmpty()) {
-                                Dialogs.message(this, L("زیرنویس خودکار", "Auto subtitles"), L("گفتاری تشخیص داده نشد.\nدلیل فنی: " + AutoSub.errName(AutoSub.lastError) + "\n• بسته‌ی زبان را نصب کنید: تنظیمات گوشی ← برنامه‌ها ← Google ← زبان‌های گفتار (دانلود فارسی/انگلیسی).\n• برنامه‌ی «Google» یا «Speech Services by Google» باید فعال و به‌روز باشد.\n• اینترنت را روشن کنید (گاهی تشخیص آنلاین لازم است).\n• صدای واضح‌تر و بدون موسیقی بهتر تشخیص داده می‌شود.\nدر غیر این صورت از «فایل SRT» استفاده کنید.", "No speech recognised.\nTechnical reason: " + AutoSub.errName(AutoSub.lastError) + "\nInstall the language pack (Google app > speech languages), keep Speech Services updated, turn on internet, or use the SRT tool."))
+                                if (AutoSub.lastError == 7) {
+                                    Dialogs.confirm(this, L("زیرنویس خودکار", "Auto subtitles"),
+                                        L("تشخیص گفتار تا آخر اجرا شد و درست کار کرد، ولی در هیچ‌یک از بخش‌های ویدیو گفتار قابل‌فهم پیدا نشد (ERROR_NO_MATCH). این ویدیو احتمالاً آواز، موسیقی یا همهمهٔ جمعیت است و تشخیص گفتار گوگل آن را متن نمی‌کند؛ خطای برنامه نیست.\n\nبرای آهنگ، متن را بچسبانید و با «زمان‌بندی با ضربه» زمان‌بندی کنید. پنل زیرنویس باز شود؟", "Recognition ran to the end but found no intelligible speech (likely singing/music/crowd). Open the manual subtitle tool?"), L("باز کردن زیرنویس", "Open subtitles")) { openSubtitlePanel() }
+                                } else
+                                Dialogs.message(this, L("زیرنویس خودکار", "Auto subtitles"), L("گفتاری تشخیص داده نشد.\nدلیل فنی: " + AutoSub.errName(AutoSub.lastError) + "\n• بسته‌ی زبان را نصب کنید: تنظیمات گوشی ← برنامه‌ها ← Google ← زبان‌های گفتار (دانلود فارسی/انگلیسی).\n• برنامه‌ی «Google» یا «Speech Services by Google» باید فعال و به‌روز باشد.\n• اینترنت را روشن کنید (گاهی تشخیص آنلاین لازم است).\n• ERROR_NO_MATCH یعنی سرویس صدا را گرفت ولی گفتاری قابل‌فهم پیدا نکرد. این ابزار برای گفتار واضح است؛ آواز، موسیقی، همهمهٔ جمعیت و کنسرت را تقریباً هرگز تشخیص نمی‌دهد (محدودیت سرویس گوگل، نه خطای برنامه).\n• صدای واضح‌تر و بدون موسیقی بهتر تشخیص داده می‌شود.\nدر غیر این صورت از «فایل SRT» استفاده کنید.", "No speech recognised.\nTechnical reason: " + AutoSub.errName(AutoSub.lastError) + "\nInstall the language pack (Google app > speech languages), keep Speech Services updated, turn on internet, or use the SRT tool."))
                             } else {
                                 beginChange()
                                 proj.overlays.removeAll { it.kind == "text" && it.glyph == "sub" }
@@ -303,6 +351,22 @@ fun EditorActivity.openAutoSubPanel() {
                 }
             }
         }
+        }
+        if (!AutoSub.allowOnline && !autoLang) {
+            AutoSub.checkOffline(this, lang) { st, installed ->
+                when (st) {
+                    1 -> Dialogs.confirm(this, L("بستهٔ زبان", "Language pack"),
+                        L("بستهٔ آفلاین این زبان روی گوشی نصب نیست. دانلود آن از طریق سرویس گوگل انجام می‌شود (نیاز به اینترنت، فقط برای دانلود مدل زبان؛ صدای شما ارسال نمی‌شود). دانلود شود؟", "The offline pack is not installed. Download it via Google (internet only for the model; your audio is not sent)?"), L("دانلود", "Download")) {
+                        AutoSub.downloadPack(this, lang)
+                        Dialogs.message(this, L("بستهٔ زبان", "Language pack"), L("دانلود شروع شد. چند دقیقه بعد (با اینترنت روشن) دوباره امتحان کنید.", "Download started. Try again in a few minutes."))
+                    }
+                    2 -> Dialogs.message(this, L("زبان پشتیبانی نمی‌شود", "Language not supported"),
+                        L("تشخیص آفلاین گوشی شما این زبان را ندارد. زبان‌های آفلاین موجود: ", "This phone's offline recogniser lacks this language. Available offline: ") + (if (installed.isEmpty()) "—" else installed.joinToString(", ")) +
+                        L("\nگزینه‌ها: زبان دیگری را امتحان کنید، یا دوباره «اجازه به سرویس آنلاین» را انتخاب کنید، یا از «فایل SRT» / «زیرنویس» دستی استفاده کنید.", "\nTry another language, allow the online service, or use SRT / manual subtitles."))
+                    else -> proceed()
+                }
+            }
+        } else proceed()
     }
     }
 }

@@ -9,5 +9,6 @@ local.properties
 *.keystore
 local.properties
 .env
+.env.*
 *.pem
 *.key
