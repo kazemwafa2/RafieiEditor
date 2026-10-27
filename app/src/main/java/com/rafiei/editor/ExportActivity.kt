@@ -37,6 +37,7 @@ class ExportActivity : Activity() {
     private var transformer: Transformer? = null
     private var running = false
     private var safeMode = false
+    private var overlayNote = ""
     private val handler = Handler(Looper.getMainLooper())
     private var outFile: File? = null
     private var progressBar: ProgressBar? = null
@@ -300,6 +301,9 @@ class ExportActivity : Activity() {
                 Bg.ui { showError(L("آماده‌سازی ناموفق بود: ", "Preparation failed: ") + (e.message ?: e.javaClass.simpleName)) }
                 return@run
             }
+            overlayNote = if (safe) L("حالت ایمن: افکت‌ها و لایه‌ها اعمال نشدند", "Safe mode: effects/layers NOT applied")
+                else if (res.overlay) L("افکت‌ها و لایه‌ها (اکولایزر، نور، افکت، متن) روی خروجی اعمال شد", "Effects/layers were rendered into the video")
+                else L("پروژه افکت یا لایهٔ روی تصویر نداشت", "The project had no effects/layers")
             Bg.ui { runTransformer(res, br) }
         }
     }
@@ -427,6 +431,11 @@ class ExportActivity : Activity() {
             val t = tv(L("مدت ویدیو: ", "Duration: ") + fmtTime(real), 14f, C.TXT2)
             val l = lp(WRAP, WRAP); l.topMargin = dp(8)
             col.addView(t, l)
+        }
+        if (video && overlayNote.isNotEmpty()) {
+            val nt = tv(overlayNote, 12f, C.TXT2)
+            val ln = lp(WRAP, WRAP); ln.topMargin = dp(4)
+            col.addView(nt, ln)
         }
         val where = tv(if (video) L("گالری ← Movies/RafieiEditor", "Gallery → Movies/RafieiEditor") else L("گالری ← Pictures/RafieiEditor", "Gallery → Pictures/RafieiEditor"), 12f, C.TXT2)
         val lw = lp(WRAP, WRAP); lw.topMargin = dp(4)

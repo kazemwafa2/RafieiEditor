@@ -73,6 +73,7 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         }
         proj = loaded
         buildUi()
+        Seg.onReady = { stage.top.invalidate(); engine.refresh() }
         timeline.project = proj
         timeline.photoMode = isPhoto
         timeline.relayout()
@@ -534,6 +535,17 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         if (!c.isImage) items.add(ToolItem("reverse", L("معکوس", "Reverse")) { reverseSelectedClip() })
         items.add(ToolItem("zoom", L("کی‌فریم", "Keyframes")) { openKeyframePanel() })
         if (c.isImage && !isPhoto) items.add(ToolItem("trim", L("مدت", "Duration")) { openDurationPanel() })
+        if (c.isImage && proj.audios.isNotEmpty()) items.add(ToolItem("music", L("هم‌اندازهٔ آهنگ", "Fit to music")) {
+            val idx = proj.clips.indexOf(c)
+            val st = proj.clipStart(idx)
+            val end = proj.audios.maxOf { it.endMs() }
+            val need = end - st
+            if (need < 500L) toast(L("آهنگ قبل از این کلیپ تمام می‌شود.", "Music ends before this clip."))
+            else {
+                mutateClip { it.imgDur = need }
+                toast(L("مدت عکس هم‌اندازهٔ آهنگ شد؛ با «برش» آن را به چند بخش تقسیم کنید و برای هر بخش نور/افکت بگذارید.", "Photo now lasts as long as the music; split it and give each part its own light/effect."))
+            }
+        })
         if (!c.isImage) items.add(ToolItem("volume", L("صدا", "Volume")) { openVolumePanel() })
         if (!isPhoto) items.add(ToolItem("anim", L("انیمیشن", "Animate")) { openAnimPanel() })
         items.add(ToolItem("rotate", L("چرخش", "Rotate")) { mutateClip { it.rot = (it.rot + 90) % 360; it.zoom = 1f; it.panX = 0f; it.panY = 0f } })
@@ -599,7 +611,9 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
     private fun fxToolbar() {
         val f = selFx() ?: return mainToolbar()
         val items = ArrayList<ToolItem>()
-        items.add(ToolItem("adjust", L("شدت", "Intensity")) { openFxIntensityPanel() })
+        if (f.fx == "light") items.add(ToolItem("wand", L("تنظیم نور", "Light settings")) { openLightPanel(f) })
+        else if (f.fx == "mask") items.add(ToolItem("crop", L("تنظیم ماسک", "Mask settings")) { openMaskPanel(f) })
+        else items.add(ToolItem("adjust", L("شدت", "Intensity")) { openFxIntensityPanel() })
         items.add(ToolItem("effect", L("تعویض", "Replace")) { openEffectPanel() })
         items.add(ToolItem("copy", L("کپی", "Duplicate")) {
             beginChange()

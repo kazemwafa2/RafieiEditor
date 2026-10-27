@@ -553,6 +553,8 @@ object Render {
         }
     }
 
+    private val curClip = ThreadLocal<Pair<Clip, Long>?>()
+
     /** Everything that is drawn above the video: clip vignette/grain, overlay effects, text and stickers. */
     fun drawTop(c: Canvas, W: Int, H: Int, p: Project, tMs: Long) {
         val Wf = W.toFloat()
@@ -567,6 +569,7 @@ object Render {
             val rr = Math.min(Wf, r[0] + r[2])
             val bb = Math.min(Hf, r[1] + r[3])
             vr = floatArrayOf(l, t, rr - l, bb - t)
+            curClip.set(Pair(clip, ct[1]))
             val mk = ClipMask.of(clip)
             if (mk != null) drawMask(c, vr, mk, ct[1])
             val lt = ClipLight.of(clip)
@@ -577,6 +580,7 @@ object Render {
             val gr = Fx.grainOf(clip)
             if (gr > 0.01f) drawGrain(c, vr, gr, tMs)
         }
+        if (ct[0] < 0) curClip.set(null)
         for (f in p.fxs) {
             if (tMs >= f.startMs && tMs < f.endMs()) {
                 val d = Fx.fxDef(f.fx)
@@ -670,6 +674,90 @@ object Render {
         c.drawPath(path, p)
     }
 
+    private fun drawButterflies(c: Canvas, p: Paint, x0: Float, y0: Float, w: Float, h: Float, t: Float, a: Float, W: Float, ccx: Float, ccy: Float, rx: Float, ry: Float) {
+        val n = (3 + 5 * a).toInt()
+        for (i in 0 until n) {
+            val ph = t * (0.25f + 0.2f * hashNoise(i + 3)) + hashNoise(i * 9) * 6.28f
+            val bx = ccx + rx * Math.sin(ph.toDouble()).toFloat() * (0.6f + 0.4f * hashNoise(i * 3 + 1))
+            val by = ccy + ry * Math.sin((ph * 1.31f + i).toDouble()).toFloat()
+            val sz = (0.05f + 0.04f * hashNoise(i * 3 + 2)) * W
+            val flap = Math.abs(Math.cos((t * 9f + i * 1.7f).toDouble())).toFloat() * 0.8f + 0.2f
+            val ang = 25f * Math.cos((ph * 1.31f + i).toDouble()).toFloat()
+            c.save()
+            c.translate(x0 + bx * w, y0 + by * h)
+            c.rotate(ang)
+            p.style = Paint.Style.FILL
+            p.setShadowLayer(sz * 0.6f, 0f, 0f, 0xFF29B6F6.toInt())
+            for (side in intArrayOf(-1, 1)) {
+                c.save(); c.scale(side * flap, 1f)
+                p.color = withAlpha(0xFF1E88E5.toInt(), 0.9f)
+                c.drawOval(RectF(0f, -sz * 0.9f, sz, 0f), p)
+                p.color = withAlpha(0xFF80D8FF.toInt(), 0.9f)
+                c.drawOval(RectF(0f, -sz * 0.1f, sz * 0.75f, sz * 0.7f), p)
+                c.restore()
+            }
+            p.clearShadowLayer()
+            p.color = withAlpha(0xFF0D47A1.toInt(), 0.95f)
+            c.drawOval(RectF(-sz * 0.04f, -sz * 0.5f, sz * 0.04f, sz * 0.4f), p)
+            c.restore()
+        }
+    }
+
+    private fun personFx(c: Canvas, f: FxItem, lk: Seg.Look, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float, p: Paint) {
+        if (lk.core == null || lk.glow == null) return
+        val col = f.cfg.toIntOrNull() ?: when (f.fx) { "p_outline" -> 0xFFE040FB.toInt(); "p_electric" -> 0xFFB388FF.toInt(); else -> Color.WHITE }
+        val dst = RectF(x0, y0, x0 + w, y0 + h)
+        val bp = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        when (f.fx) {
+            "p_outline" -> {
+                bp.colorFilter = android.graphics.PorterDuffColorFilter(col, PorterDuff.Mode.SRC_IN)
+                bp.alpha = (255 * clampF(0.35f + a * 0.65f, 0f, 1f)).toInt()
+                c.drawBitmap(lk.glow, null, dst, bp)
+                bp.colorFilter = null
+                bp.alpha = 255
+                c.drawBitmap(lk.core, null, dst, bp)
+            }
+            "p_electric" -> {
+                val k = (t * 16f).toInt()
+                bp.colorFilter = android.graphics.PorterDuffColorFilter(col, PorterDuff.Mode.SRC_IN)
+                bp.alpha = (255 * clampF(0.35f + a * 0.65f, 0f, 1f)).toInt()
+                c.drawBitmap(lk.glow, null, dst, bp)
+                for (j in 0 until 3) {
+                    val ox = (hashNoise(k * 7 + j * 13) - 0.5f) * W * 0.012f
+                    val oy = (hashNoise(k * 11 + j * 17) - 0.5f) * W * 0.012f
+                    c.save()
+                    c.translate(ox, oy)
+                    bp.colorFilter = if (j == 0) null else android.graphics.PorterDuffColorFilter(col, PorterDuff.Mode.SRC_IN)
+                    bp.alpha = if (j == 0) 255 else 200
+                    c.drawBitmap(lk.core, null, dst, bp)
+                    c.restore()
+                }
+            }
+            "p_sparkle" -> {
+                val n = (20 + 60 * a).toInt()
+                val m = lk.pts.size / 2
+                if (m > 0) for (i in 0 until n) {
+                    val pi = (hashNoise(i * 5 + 1) * m).toInt().coerceIn(0, m - 1)
+                    val px = lk.pts[pi * 2]
+                    val py = lk.pts[pi * 2 + 1]
+                    val tw = Math.max(0f, Math.sin((t * (2f + 3f * hashNoise(i + 40)) + i * 1.7f).toDouble()).toFloat())
+                    val rad = 0.02f * W * (0.5f + hashNoise(i * 5 + 3)) * (0.4f + tw)
+                    p.style = Paint.Style.FILL
+                    p.color = withAlpha(col, 0.3f + 0.7f * tw)
+                    p.setShadowLayer(rad, 0f, 0f, col)
+                    star4(c, x0 + px * w, y0 + py * h, rad, p)
+                    p.clearShadowLayer()
+                }
+            }
+            "p_butterfly" -> {
+                val b = lk.box
+                val cx = (b[0] + b[2]) / 2f
+                val cy = b[1] + (b[3] - b[1]) * 0.3f
+                drawButterflies(c, p, x0, y0, w, h, t, a, W, cx, cy, Math.max(0.12f, (b[2] - b[0]) * 0.75f), Math.max(0.12f, (b[3] - b[1]) * 0.5f))
+            }
+        }
+    }
+
     private fun drawFx(c: Canvas, f: FxItem, r: FloatArray, tMs: Long, W: Float) {
         val t = (tMs - f.startMs) / 1000f
         val a = f.amt
@@ -683,6 +771,91 @@ object Render {
         when (f.fx) {
             "vignette" -> drawVignette(c, r, a)
             "grain" -> drawGrain(c, r, a, tMs)
+            "light" -> if (f.cfg.isNotEmpty()) { c.restore(); drawLight(c, r, ClipLight.cached(f.cfg), tMs, (tMs - f.startMs), W); c.save() }
+            "mask" -> if (f.cfg.isNotEmpty()) { c.restore(); drawMask(c, r, ClipMask.cached(f.cfg), (tMs - f.startMs)); c.save() }
+            "papertear" -> {
+                // two torn paper edges (left and right); outside them the picture is veiled in grey
+                val wob = 0.012f * Math.sin((t * 0.8f).toDouble()).toFloat()
+                val edges = floatArrayOf(0.17f + wob, 0.83f - wob)
+                for ((ei, ex) in edges.withIndex()) {
+                    val path = Path()
+                    val steps = 40
+                    val pts = FloatArray(steps + 1)
+                    for (k in 0..steps) pts[k] = (hashNoise(k * 7 + ei * 101) - 0.5f) * 0.035f * w + (k - steps / 2f) * (if (ei == 0) 0.0045f else -0.0045f) * w
+                    val sw = 0.03f * w
+                    // outside veil
+                    val veil = Path()
+                    if (ei == 0) veil.moveTo(x0, y0) else veil.moveTo(x0 + w, y0)
+                    for (k in 0..steps) veil.lineTo(x0 + ex * w + pts[k], y0 + h * k / steps)
+                    if (ei == 0) { veil.lineTo(x0, y0 + h) } else { veil.lineTo(x0 + w, y0 + h) }
+                    veil.close()
+                    p.style = Paint.Style.FILL
+                    p.color = withAlpha(0xFF808080.toInt(), 0.5f * a)
+                    c.drawPath(veil, p)
+                    // paper strip
+                    path.moveTo(x0 + ex * w + pts[0] - sw, y0)
+                    for (k in 0..steps) path.lineTo(x0 + ex * w + pts[k] - sw * (0.6f + hashNoise(k + ei * 55)), y0 + h * k / steps)
+                    for (k in steps downTo 0) path.lineTo(x0 + ex * w + pts[k] + sw * (0.6f + hashNoise(k + 200 + ei * 55)), y0 + h * k / steps)
+                    path.close()
+                    p.color = withAlpha(0xFFF5F0E6.toInt(), 0.95f)
+                    p.setShadowLayer(W * 0.012f, 0f, 0f, withAlpha(Color.BLACK, 0.5f))
+                    c.drawPath(path, p)
+                    p.clearShadowLayer()
+                }
+            }
+            "butterflies" -> drawButterflies(c, p, x0, y0, w, h, t, a, W, 0.5f, 0.5f, 0.38f, 0.38f)
+            "p_outline", "p_electric", "p_sparkle", "p_butterfly" -> {
+                val cc = curClip.get()
+                if (cc != null) {
+                    val lk = Seg.lookAt(cc.first, cc.second)
+                    if (lk != null) personFx(c, f, lk, x0, y0, w, h, t, W, a, p)
+                }
+            }
+            "sparkhalo" -> {
+                // arch of twinkling sparkles over the head and down both sides (fixed to the frame, not tracking a person)
+                val n = (24 + 36 * a).toInt()
+                for (i in 0 until n) {
+                    val ang = Math.PI.toFloat() * (1.0f + hashNoise(i * 5 + 1)) + 0.12f * Math.sin((t * 0.6f + i).toDouble()).toFloat()
+                    val rr = 0.27f + 0.09f * hashNoise(i * 5 + 2)
+                    val x = 0.5f + Math.cos(ang.toDouble()).toFloat() * rr * 1.15f
+                    val y = 0.40f + Math.sin(ang.toDouble()).toFloat() * rr * 1.1f + 0.10f * hashNoise(i + 70) * (if (hashNoise(i + 3) > 0.7f) 2f else 0f)
+                    val tw = Math.max(0f, Math.sin((t * (2f + 3f * hashNoise(i + 40)) + i * 1.7f).toDouble()).toFloat())
+                    val rad = 0.022f * W * (0.5f + hashNoise(i * 5 + 3)) * (0.4f + tw)
+                    p.color = withAlpha(Color.WHITE, 0.3f + 0.7f * tw)
+                    p.setShadowLayer(rad, 0f, 0f, Color.WHITE)
+                    star4(c, x0 + x * w, y0 + y * h, rad, p)
+                    p.clearShadowLayer()
+                }
+            }
+            "elecframe" -> {
+                // glowing lightning-like outline that jitters along the frame edges
+                val k = (t * 14f).toInt()
+                val path = Path()
+                val m = 0.035f * Math.min(w, h)
+                val segs = 36
+                fun pt(side: Int, i: Int): FloatArray {
+                    val u = i.toFloat() / segs
+                    val j = (hashNoise(k * 977 + side * 131 + i * 7) - 0.5f) * 2f * m
+                    return when (side) {
+                        0 -> floatArrayOf(x0 + m + u * (w - 2 * m), y0 + m + j)
+                        1 -> floatArrayOf(x0 + w - m + j, y0 + m + u * (h - 2 * m))
+                        2 -> floatArrayOf(x0 + w - m - u * (w - 2 * m), y0 + h - m + j)
+                        else -> floatArrayOf(x0 + m + j, y0 + h - m - u * (h - 2 * m))
+                    }
+                }
+                for (side in 0..3) for (i in 0..segs) { val q = pt(side, i); if (side == 0 && i == 0) path.moveTo(q[0], q[1]) else path.lineTo(q[0], q[1]) }
+                path.close()
+                p.style = Paint.Style.STROKE
+                p.strokeJoin = Paint.Join.ROUND
+                p.strokeWidth = W * 0.012f * (0.6f + a)
+                p.color = withAlpha(0xFFE040FB.toInt(), 0.9f)
+                p.setShadowLayer(W * 0.03f, 0f, 0f, 0xFFE040FB.toInt())
+                c.drawPath(path, p)
+                p.clearShadowLayer()
+                p.strokeWidth = W * 0.004f
+                p.color = Color.WHITE
+                c.drawPath(path, p)
+            }
             "vhs" -> {
                 p.color = withAlpha(Color.BLACK, 0.16f * (0.4f + a))
                 var y = y0

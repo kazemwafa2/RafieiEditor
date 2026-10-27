@@ -90,6 +90,9 @@ class TimelineOverlay(private val p: Project, private val W: Int, private val H:
         return sb.toString()
     }
 
+    override fun getOverlaySettings(presentationTimeUs: Long): androidx.media3.effect.OverlaySettings =
+        androidx.media3.effect.OverlaySettings.Builder().build()
+
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
         val t = presentationTimeUs / 1000L
         val k = key(t)
@@ -108,7 +111,7 @@ class TimelineOverlay(private val p: Project, private val W: Int, private val H:
 
 object Exporter {
 
-    class Result(val composition: Composition, val totalMs: Long)
+    class Result(val composition: Composition, val totalMs: Long, val overlay: Boolean = false)
 
     private fun speedEffect(speed: Float): Effect? {
         return try {
@@ -150,6 +153,7 @@ object Exporter {
 
     fun build(ctx: Context, src: Project, outW: Int, outH: Int, safe: Boolean, fps: Int = 0): Result {
         val p = copyProject(src)
+        if (p.fxs.any { Seg.isPerson(it.fx) }) Seg.prepareBlocking(p)
         if (p.overlays.any { it.kind == "eq" } || p.audios.any { it.duck > 0.01f }) EqAudio.prepareBlocking(p)
         val total = p.totalMs()
         val videoItems = ArrayList<EditedMediaItem>()
@@ -296,7 +300,9 @@ object Exporter {
 
         val builder = Composition.Builder(sequences)
         val compEffects = ArrayList<Effect>()
+        var overlayUsed = false
         if (!safe && needsOverlay(p, outW, outH)) {
+            overlayUsed = true
             val overlay = TimelineOverlay(p, outW, outH)
             compEffects.add(OverlayEffect(ImmutableList.of<TextureOverlay>(overlay)))
         }
@@ -308,7 +314,7 @@ object Exporter {
             }
         }
         if (compEffects.isNotEmpty()) builder.setEffects(Effects(ArrayList<AudioProcessor>(), compEffects))
-        return Result(builder.build(), total)
+        return Result(builder.build(), total, overlayUsed)
     }
 
     private fun needsOverlay(p: Project, W: Int, H: Int): Boolean {

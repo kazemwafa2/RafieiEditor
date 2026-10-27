@@ -92,13 +92,13 @@ private val LIGHT_ANIMS = listOf(
 )
 
 /** Studio light ("نور") of the selected clip. */
-fun EditorActivity.openLightPanel() {
-    val c = targetClip() ?: return
-    val light = ClipLight.fromJson(c.light)
+fun EditorActivity.openLightPanel(fxT: FxItem? = null) {
+    val c = if (fxT == null) (targetClip() ?: return) else null
+    val light = ClipLight.fromJson(if (fxT != null) fxT.cfg else c!!.light)
     val content = FrameLayout(this)
 
     fun push() {
-        c.light = if (light.mode == "off") "" else light.toJson()
+        if (fxT != null) fxT.cfg = light.toJson() else c!!.light = if (light.mode == "off") "" else light.toJson()
         stage.top.invalidate()
         engine.refresh()
     }
@@ -115,6 +115,33 @@ fun EditorActivity.openLightPanel() {
             val sv = ScrollView(this)
             val inner = lin(true)
             val isBeam = light.mode == "beam"
+            inner.addView(ltCaption(L("حرکت نور", "Light motion")), lp(MATCH, WRAP))
+            val names = LIGHT_ANIMS.map { L(it.second.first, it.second.second) }
+            val cur = Math.max(0, LIGHT_ANIMS.indexOfFirst { it.first == light.anim })
+            inner.addView(ChipRow(this, names, cur) { i ->
+                light.anim = LIGHT_ANIMS[i].first
+                if (light.anim != "none") {
+                    if (light.spd < 0.2f) light.spd = 0.6f
+                    if (light.amp < 0.05f) light.amp = 0.3f
+                }
+                push()
+                build()
+                if (light.anim != "none" && !engine.playing) engine.play()
+            }, lp(MATCH, WRAP))
+            if (light.anim != "none") {
+                inner.addView(slider(L("سرعت", "Speed"), 10f, 300f, light.spd * 100f, { fmtS(it / 100f) }) { light.spd = it / 100f }, lp(MATCH, WRAP))
+                inner.addView(slider(L("دامنه افقی", "Range X"), 2f, 80f, light.amp * 100f, { Math.round(it).toString() }) { light.amp = it / 100f }, lp(MATCH, WRAP))
+                inner.addView(slider(L("دامنه عمودی", "Range Y"), 2f, 80f, (if (light.ampY < 0f) light.amp else light.ampY) * 100f, { Math.round(it).toString() }) { light.ampY = it / 100f }, lp(MATCH, WRAP))
+                inner.addView(slider(L("نقطه شروع حرکت", "Start phase"), 0f, 100f, light.phase * 100f, ::fmtP2) { light.phase = it / 100f }, lp(MATCH, WRAP))
+                val dw = FrameLayout(this)
+                dw.setPadding(dp(10), dp(4), dp(10), dp(2))
+                dw.addView(ltPill(L("جهت حرکت: " + (if (light.dir > 0) "عادی" else "معکوس"), "Direction: " + (if (light.dir > 0) "normal" else "reverse")), true) {
+                    light.dir = -light.dir
+                    push()
+                    build()
+                }, FrameLayout.LayoutParams(WRAP, WRAP))
+                inner.addView(dw, lp(MATCH, WRAP))
+            }
             inner.addView(slider(L("جای نور: چپ/راست", "Light X"), 0f, 100f, light.lx * 100f, { Math.round(it).toString() }) { light.lx = it / 100f }, lp(MATCH, WRAP))
             inner.addView(slider(L("جای نور: بالا/پایین", "Light Y"), 0f, 100f, light.ly * 100f, { Math.round(it).toString() }) { light.ly = it / 100f }, lp(MATCH, WRAP))
             if (isBeam) {
@@ -134,28 +161,6 @@ fun EditorActivity.openLightPanel() {
                 inner.addView(ltCaption(L("رنگ نور", "Light colour")), lp(MATCH, WRAP))
                 inner.addView(ColorRow(this, light.color) { col2 -> light.color = col2; push() }, lp(MATCH, WRAP))
             }
-            inner.addView(ltCaption(L("حرکت نور", "Light motion")), lp(MATCH, WRAP))
-            val names = LIGHT_ANIMS.map { L(it.second.first, it.second.second) }
-            val cur = Math.max(0, LIGHT_ANIMS.indexOfFirst { it.first == light.anim })
-            inner.addView(ChipRow(this, names, cur) { i ->
-                light.anim = LIGHT_ANIMS[i].first
-                push()
-                build()
-            }, lp(MATCH, WRAP))
-            if (light.anim != "none") {
-                inner.addView(slider(L("سرعت", "Speed"), 10f, 300f, light.spd * 100f, { fmtS(it / 100f) }) { light.spd = it / 100f }, lp(MATCH, WRAP))
-                inner.addView(slider(L("دامنه افقی", "Range X"), 2f, 80f, light.amp * 100f, { Math.round(it).toString() }) { light.amp = it / 100f }, lp(MATCH, WRAP))
-                inner.addView(slider(L("دامنه عمودی", "Range Y"), 2f, 80f, (if (light.ampY < 0f) light.amp else light.ampY) * 100f, { Math.round(it).toString() }) { light.ampY = it / 100f }, lp(MATCH, WRAP))
-                inner.addView(slider(L("نقطه شروع حرکت", "Start phase"), 0f, 100f, light.phase * 100f, ::fmtP2) { light.phase = it / 100f }, lp(MATCH, WRAP))
-                val dw = FrameLayout(this)
-                dw.setPadding(dp(10), dp(4), dp(10), dp(2))
-                dw.addView(ltPill(L("جهت حرکت: " + (if (light.dir > 0) "عادی" else "معکوس"), "Direction: " + (if (light.dir > 0) "normal" else "reverse")), true) {
-                    light.dir = -light.dir
-                    push()
-                    build()
-                }, FrameLayout.LayoutParams(WRAP, WRAP))
-                inner.addView(dw, lp(MATCH, WRAP))
-            }
             val w = FrameLayout(this)
             w.setPadding(dp(10), dp(4), dp(10), dp(2))
             w.addView(ltPill(L("اعمال این نور روی همه کلیپ‌ها", "Apply to all clips")) {
@@ -165,11 +170,34 @@ fun EditorActivity.openLightPanel() {
                 engine.refresh()
                 toast(L("روی همه کلیپ‌ها اعمال شد", "Applied to all clips"))
             }, FrameLayout.LayoutParams(WRAP, WRAP))
-            inner.addView(w, lp(MATCH, WRAP))
+            if (fxT == null) inner.addView(w, lp(MATCH, WRAP))
             sv.addView(inner)
-            col.addView(sv, lp(MATCH, dp(230)))
+            col.addView(sv, lp(MATCH, dp(280)))
         }
         content.addView(col, FrameLayout.LayoutParams(MATCH, WRAP))
+    }
+
+    // ready designs: light shape + automatic motion, everything adjustable afterwards
+    class Design(val name: String, val preset: String, val anim: String, val spd: Float, val amp: Float)
+    val designs = listOf(
+        Design(L("نوار بالا↕پایین", "Band up/down"), "eyes", "vert", 0.6f, 0.30f),
+        Design(L("اسکن عمودی", "Scan down"), "eyes", "scany", 0.4f, 0.30f),
+        Design(L("پرتو چپ↔راست", "Beam left/right"), "vbeam", "sweep", 0.6f, 0.30f),
+        Design(L("پرتو چرخان", "Spinning beam"), "beam", "spin", 0.6f, 0.2f),
+        Design(L("پرتو مورب", "Diagonal beam"), "diag", "diag", 0.6f, 0.3f),
+        Design(L("نورافکن دایره‌ای", "Spot orbit"), "spot", "orbit", 0.6f, 0.3f),
+        Design(L("نورافکن پرش", "Spot bounce"), "spot", "bounce", 0.7f, 0.3f),
+        Design(L("نورافکن آزاد", "Spot wander"), "spot", "wander", 0.5f, 0.35f),
+        Design(L("تمرکز تپنده", "Breathing focus"), "focus", "breathe", 0.6f, 0.2f),
+        Design(L("نوار عدد ۸", "Figure 8"), "strip", "fig8", 0.6f, 0.3f)
+    )
+    val dChips = ChipRow(this, designs.map { it.name }, -1) { i ->
+        val d = designs[i]
+        light.applyPreset(d.preset)
+        light.anim = d.anim; light.spd = d.spd; light.amp = d.amp; light.ampY = -1f; light.phase = 0f; light.dir = 1f
+        push()
+        build()
+        if (!engine.playing) engine.play()
     }
 
     val ids = ClipLight.PRESETS.map { it.first }
@@ -178,16 +206,12 @@ fun EditorActivity.openLightPanel() {
     if (light.mode == "off") curI = ids.indexOf("off")
     val chips = ChipRow(this, labels, curI) { i ->
         val id = ids[i]
-        val keep = light.mode == "off"
-        if (keep && id != "off") {
-            light.anim = "none"
-        }
         light.applyPreset(id)
         push()
         build()
     }
     build()
-    openPanel(ltBox(chips, content), false)
+    openPanel(ltBox(dChips, chips, content), false)
 }
 
 private fun fmtP2(v: Float): String = Math.round(v).toString() + "%"

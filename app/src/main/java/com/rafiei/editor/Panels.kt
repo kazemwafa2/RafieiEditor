@@ -314,11 +314,11 @@ fun EditorActivity.openEffectPanel() {
         }
     }
 
-    fun grid(overlay: Boolean): HorizontalScrollView {
+    fun grid(overlay: Boolean, filters: Boolean = false): HorizontalScrollView {
         val row = lin(false)
         row.setPadding(dp(6), dp(4), dp(6), dp(4))
         for (d in Fx.FX_LIST) {
-            if (d.overlay != overlay) continue
+            if (d.overlay != overlay || d.id.startsWith("flt_") != filters) continue
             val t = FxTile(this, d)
             t.setOnClickListener {
                 val cur = selFx()
@@ -329,7 +329,11 @@ fun EditorActivity.openEffectPanel() {
                     val f = FxItem()
                     f.fx = d.id
                     f.durMs = if (d.overlay) 4000 else 2000
+                    if (d.id == "light") { val l0 = ClipLight(); l0.applyPreset("beam"); f.cfg = l0.toJson() }
+                    if (d.id == "mask") { val m0 = ClipMask(); m0.shape = "circle"; m0.sw = 0.6f; m0.sh = 0.6f; f.cfg = m0.toJson() }
                     addFx(f)
+                    if (d.id == "light") { openLightPanel(f); return@setOnClickListener }
+                    if (d.id == "mask") { openMaskPanel(f); return@setOnClickListener }
                 }
                 buildIntensity()
                 if (!engine.playing) engine.play()
@@ -342,9 +346,9 @@ fun EditorActivity.openEffectPanel() {
     val holder = FrameLayout(this)
     fun show(i: Int) {
         holder.removeAllViews()
-        holder.addView(grid(i == 1), FrameLayout.LayoutParams(MATCH, WRAP))
+        holder.addView(grid(i == 1, i == 2), FrameLayout.LayoutParams(MATCH, WRAP))
     }
-    val tabs = ChipRow(this, listOf(L("حرکت و رنگ", "Motion & color"), L("روکش‌ها", "Overlays")), 0) { i -> show(i) }
+    val tabs = ChipRow(this, listOf(L("حرکت و رنگ", "Motion & color"), L("روکش‌ها", "Overlays"), L("فیلتر بازه‌ای", "Filters (range)")), 0) { i -> show(i) }
     show(0)
     buildIntensity()
     openPanel(box(tabs, holder, slHolder), false)
@@ -352,10 +356,14 @@ fun EditorActivity.openEffectPanel() {
 
 fun EditorActivity.openFxIntensityPanel() {
     val f = selFx() ?: return
-    openPanel(box(SliderRow(this, L("شدت", "Intensity"), 5f, 100f, f.amt * 100f, false, { fmtPct(it) }, { v ->
+    val sl = SliderRow(this, L("شدت", "Intensity"), 5f, 100f, f.amt * 100f, false, { fmtPct(it) }, { v ->
         f.amt = v / 100f
         engine.refresh()
-    })), false)
+    })
+    if (Seg.isPerson(f.fx)) {
+        val first = f.cfg.toIntOrNull() ?: 0xFFE040FB.toInt()
+        openPanel(box(sl, caption(L("رنگ افکت", "Effect colour")), ColorRow(this, first) { c2 -> f.cfg = c2.toString(); stage.top.invalidate(); engine.refresh() }), false)
+    } else openPanel(box(sl), false)
 }
 
 // ------------------------------------------------------------------ stickers

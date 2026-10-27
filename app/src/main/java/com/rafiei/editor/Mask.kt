@@ -59,6 +59,13 @@ class ClipMask {
             return m
         }
 
+        private val cache2 = HashMap<String, ClipMask>()
+        fun cached(js: String): ClipMask {
+            var m = cache2[js]
+            if (m == null) { m = fromJson(js); if (cache2.size > 64) cache2.clear(); cache2[js] = m }
+            return m
+        }
+
         fun of(c: Clip): ClipMask? {
             if (c.mask.isEmpty()) return null
             var m = cache[c.mask]

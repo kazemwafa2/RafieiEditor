@@ -42,28 +42,24 @@ class ClipLight {
         return o.toString()
     }
 
-    /** Applies one of the studio presets, keeping the animation settings. */
+    /** Applies one of the studio presets. Every preset brings its own automatic motion (all adjustable afterwards). */
     fun applyPreset(id: String) {
-        val keepA = anim
-        val keepS = spd
-        val keepP = amp
-        val keepD = dir
-        val keepPh = phase
-        val keepY = ampY
         val b = ClipLight()
         when (id) {
-            "beam" -> { b.mode = "beam"; b.lx = 0.6f; b.ly = 0.5f; b.ang = -72f; b.wid = 0.34f; b.soft = 0.06f; b.dark = 0.9f; b.glow = 0.12f; b.color = 0xFFFFE6C8.toInt() }
-            "focus" -> { b.mode = "focus"; b.lx = 0.5f; b.ly = 0.42f; b.rad = 0.36f; b.soft = 0.5f; b.blur = 22f; b.dark = 0.25f }
-            "strip" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.47f; b.ang = 1.5f; b.wid = 0.07f; b.soft = 0.02f; b.dark = 0.4f; b.glow = 0.9f; b.color = 0xFFFFD89A.toInt() }
-            "spot" -> { b.mode = "spot"; b.lx = 0.5f; b.ly = 0.4f; b.rad = 0.5f; b.soft = 0.6f; b.dark = 0.88f; b.glow = 0.1f; b.color = 0xFFFFF0D8.toInt() }
-            "eyes" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.36f; b.ang = 0f; b.wid = 0.12f; b.soft = 0.05f; b.dark = 0.75f; b.glow = 0.55f; b.color = 0xFFFFE9C0.toInt() }
-            "vbeam" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.5f; b.ang = 90f; b.wid = 0.22f; b.soft = 0.05f; b.dark = 0.85f; b.glow = 0.25f; b.color = 0xFFFFE6C8.toInt() }
-            "diag" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.5f; b.ang = -45f; b.wid = 0.2f; b.soft = 0.06f; b.dark = 0.85f; b.glow = 0.3f; b.color = 0xFFFFE6C8.toInt() }
+            "ud" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.5f; b.ang = 0f; b.wid = 0.16f; b.soft = 0.05f; b.dark = 0.8f; b.glow = 0.5f; b.color = 0xFFFFE9C0.toInt(); b.anim = "vert"; b.spd = 0.6f; b.amp = 0.32f }
+            "lr" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.5f; b.ang = 90f; b.wid = 0.22f; b.soft = 0.05f; b.dark = 0.85f; b.glow = 0.3f; b.color = 0xFFFFE6C8.toInt(); b.anim = "sweep"; b.spd = 0.6f; b.amp = 0.32f }
+            "orb" -> { b.mode = "spot"; b.lx = 0.5f; b.ly = 0.5f; b.rad = 0.38f; b.soft = 0.6f; b.dark = 0.85f; b.glow = 0.12f; b.color = 0xFFFFF0D8.toInt(); b.anim = "orbit"; b.spd = 0.5f; b.amp = 0.3f }
+            "dg" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.5f; b.ang = -45f; b.wid = 0.2f; b.soft = 0.06f; b.dark = 0.85f; b.glow = 0.3f; b.color = 0xFFFFE6C8.toInt(); b.anim = "diag"; b.spd = 0.5f; b.amp = 0.3f }
+            "beam" -> { b.mode = "beam"; b.lx = 0.6f; b.ly = 0.5f; b.ang = -72f; b.wid = 0.34f; b.soft = 0.06f; b.dark = 0.9f; b.glow = 0.12f; b.color = 0xFFFFE6C8.toInt(); b.anim = "sweep"; b.spd = 0.4f; b.amp = 0.2f }
+            "focus" -> { b.mode = "focus"; b.lx = 0.5f; b.ly = 0.42f; b.rad = 0.36f; b.soft = 0.5f; b.blur = 22f; b.dark = 0.25f; b.anim = "wander"; b.spd = 0.4f; b.amp = 0.15f }
+            "strip" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.47f; b.ang = 1.5f; b.wid = 0.07f; b.soft = 0.02f; b.dark = 0.4f; b.glow = 0.9f; b.color = 0xFFFFD89A.toInt(); b.anim = "scany"; b.spd = 0.4f; b.amp = 0.3f }
+            "spot" -> { b.mode = "spot"; b.lx = 0.5f; b.ly = 0.4f; b.rad = 0.5f; b.soft = 0.6f; b.dark = 0.88f; b.glow = 0.1f; b.color = 0xFFFFF0D8.toInt(); b.anim = "bounce"; b.spd = 0.4f; b.amp = 0.25f }
+            "eyes" -> { b.mode = "beam"; b.lx = 0.5f; b.ly = 0.36f; b.ang = 0f; b.wid = 0.12f; b.soft = 0.05f; b.dark = 0.75f; b.glow = 0.55f; b.color = 0xFFFFE9C0.toInt(); b.anim = "vert"; b.spd = 0.5f; b.amp = 0.06f }
             else -> { b.mode = "off" }
         }
         mode = b.mode; lx = b.lx; ly = b.ly; ang = b.ang; wid = b.wid; soft = b.soft; rad = b.rad
         dark = b.dark; glow = b.glow; color = b.color; blur = b.blur
-        anim = keepA; spd = keepS; amp = keepP; dir = keepD; phase = keepPh; ampY = keepY
+        anim = b.anim; spd = b.spd; amp = b.amp; ampY = -1f; dir = 1f; phase = 0f
     }
 
     fun isPreset(id: String): Boolean {
@@ -76,13 +72,15 @@ class ClipLight {
         private val cache = HashMap<String, ClipLight>()
 
         val PRESETS = listOf(
-            "beam" to "پرتو اریب",
-            "focus" to "تمرکز و حاشیه محو",
-            "strip" to "نوار نور",
+            "ud" to "بالا و پایین",
+            "lr" to "چپ و راست",
+            "orb" to "دایره‌ای",
+            "dg" to "مورب",
             "eyes" to "نوار روی چشم",
-            "vbeam" to "پرتو عمودی",
-            "diag" to "پرتو مورب",
-            "spot" to "نورافکن",
+            "strip" to "نوار اسکن",
+            "beam" to "پرتو اریب",
+            "spot" to "نورافکن پرنده",
+            "focus" to "تمرکز و حاشیه محو",
             "off" to "بدون نور"
         )
 
@@ -100,6 +98,13 @@ class ClipLight {
                 l.dir = o.optDouble("dir", 1.0).toFloat(); l.phase = o.optDouble("ph", 0.0).toFloat(); l.ampY = o.optDouble("ay", -1.0).toFloat()
             } catch (e: Exception) {
             }
+            return l
+        }
+
+        private val cache2 = HashMap<String, ClipLight>()
+        fun cached(js: String): ClipLight {
+            var l = cache2[js]
+            if (l == null) { l = fromJson(js); if (cache2.size > 64) cache2.clear(); cache2[js] = l }
             return l
         }
 

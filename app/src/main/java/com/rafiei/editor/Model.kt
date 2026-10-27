@@ -251,11 +251,13 @@ class FxItem {
     var startMs = 0L
     var durMs = 2000L
     var amt = 0.7f
+    var cfg = "" // extra settings (light / mask JSON)
     fun endMs(): Long = startMs + durMs
 
     fun toJson(): JSONObject {
         val o = JSONObject()
         o.put("id", id); o.put("fx", fx); o.put("st", startMs); o.put("du", durMs); o.put("amt", amt.toDouble())
+        if (cfg.isNotEmpty()) o.put("cfg", cfg)
         return o
     }
 
@@ -263,7 +265,7 @@ class FxItem {
         fun fromJson(o: JSONObject): FxItem {
             val f = FxItem()
             f.id = o.optString("id", uid()); f.fx = o.optString("fx", "flash"); f.startMs = o.optLong("st")
-            f.durMs = o.optLong("du", 2000); f.amt = o.optDouble("amt", 0.7).toFloat()
+            f.durMs = o.optLong("du", 2000); f.amt = o.optDouble("amt", 0.7).toFloat(); f.cfg = o.optString("cfg", "")
             return f
         }
     }

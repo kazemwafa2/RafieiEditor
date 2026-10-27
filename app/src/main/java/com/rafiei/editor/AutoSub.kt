@@ -113,6 +113,58 @@ object AutoSub {
     @Volatile var lastError = 0
     /** Online (server) recognition only with the user's explicit consent for this run. */
     @Volatile var allowOnline = false
+    /** Play each piece through the loudspeaker and let the system recogniser listen with the microphone. */
+    @Volatile var useMic = false
+    @Volatile var cancelFlag = false
+
+    private fun recognizeMic(ctx: android.content.Context, pcm: ShortArray, from: Int, to: Int, lang: String, cb: (String?) -> Unit) {
+        val rec: SpeechRecognizer? = try { if (SpeechRecognizer.isRecognitionAvailable(ctx)) SpeechRecognizer.createSpeechRecognizer(ctx) else null } catch (e: Throwable) { null }
+        if (rec == null) { lastError = 5; cb(null); return }
+        var finished = false
+        var track: android.media.AudioTrack? = null
+        fun finish(t: String?, err: Int) {
+            if (finished) return
+            finished = true
+            try { track?.stop(); track?.release() } catch (e: Throwable) { }
+            try { rec.destroy() } catch (e: Throwable) { }
+            if (err != 0) lastError = err
+            cb(t)
+        }
+        try {
+            rec.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onError(error: Int) { finish(null, if (error == 0) -1 else error) }
+                override fun onResults(results: Bundle?) { finish(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull(), 0) }
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+            val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            rec.startListening(i)
+            val n = to - from
+            Bg.postDelayed(500L) {
+                try {
+                    val t = android.media.AudioTrack.Builder()
+                        .setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                        .setAudioFormat(android.media.AudioFormat.Builder().setSampleRate(16000).setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT).setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO).build())
+                        .setBufferSizeInBytes(n * 2).setTransferMode(android.media.AudioTrack.MODE_STATIC).build()
+                    t.write(pcm, from, n)
+                    track = t
+                    t.play()
+                } catch (e: Throwable) { }
+            }
+            Bg.postDelayed(500L + n / 16L + 600L) { if (!finished) try { rec.stopListening() } catch (e: Throwable) { } }
+            Bg.postDelayed(500L + n / 16L + 5000L) { finish(null, 7) }
+        } catch (e: Throwable) {
+            finish(null, 5)
+        }
+    }
 
     /**
      * Recognises one chunk; the callback receives the text or null. Must be called on the main thread.
@@ -120,6 +172,7 @@ object AutoSub {
      * lacks the language pack, or fails.
      */
     fun recognize(ctx: android.content.Context, pcm: ShortArray, from: Int, to: Int, lang: String, cb: (String?) -> Unit) {
+        if (useMic) { recognizeMic(ctx, pcm, from, to, lang, cb); return }
         if (Build.VERSION.SDK_INT < 33) { cb(null); return }
         val modes = ArrayList<Boolean>()
         try { if (SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)) modes.add(true) } catch (e: Throwable) { }
@@ -264,9 +317,12 @@ fun EditorActivity.openAutoSubPanel() {
     }
     Dialogs.choose(this, L("روش تشخیص گفتار", "Recognition mode"), listOf(
         L("فقط آفلاین (روی همین گوشی، چیزی ارسال نمی‌شود)", "Offline only (nothing is sent)"),
-        L("اجازه به سرویس آنلاین گوگل (ممکن است صدا به سرور ارسال شود)", "Allow Google online service (audio may be sent)")
+        L("اجازه به سرویس آنلاین گوگل (ممکن است صدا به سرور ارسال شود)", "Allow Google online service (audio may be sent)"),
+        L("پخش از بلندگو + شنیدن با میکروفون (آنلاین؛ هم‌زمان با پخش پیش می‌رود؛ جای ساکت و صدای گوشی زیاد)", "Loudspeaker + microphone (online, real time; quiet room, volume up)")
     )) { mi ->
-    AutoSub.allowOnline = mi == 1
+    AutoSub.allowOnline = mi >= 1
+    AutoSub.useMic = mi == 2
+    AutoSub.cancelFlag = false
     val langs = listOf("auto" to "تشخیص خودکار زبان", "fa-IR" to "فارسی / دری", "en-US" to "English", "ps-AF" to "پشتو", "ar-SA" to "العربية", "tr-TR" to "Türkçe", "ur-PK" to "اردو", "hi-IN" to "हिन्दी", "ru-RU" to "Русский")
     Dialogs.choose(this, L("زبان گفتار", "Speech language"), langs.map { it.second }) { li ->
         var lang = langs[li].first
@@ -280,7 +336,9 @@ fun EditorActivity.openAutoSubPanel() {
         val ts = c.trimStart
         val te = c.trimEnd
         val speed = c.speed
-        val dlg: AlertDialog = progressDialog(L("در حال خواندن صدا…", "Reading audio…"))
+        val dlg: AlertDialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setMessage(L("در حال خواندن صدا…", "Reading audio…")).setCancelable(false)
+            .setNegativeButton(L("توقف", "Stop")) { _, _ -> AutoSub.cancelFlag = true }.create().also { it.show() }
         Bg.run {
             val pcm = AutoSub.decode16k(path, ts, te)
             Bg.ui {
@@ -294,7 +352,7 @@ fun EditorActivity.openAutoSubPanel() {
                     var k = 0
                     lateinit var step: () -> Unit
                     step = {
-                        if (k >= total) {
+                        if (k >= total || AutoSub.cancelFlag) {
                             dlg.dismiss()
                             if (lines.isEmpty()) {
                                 if (AutoSub.lastError == 7) {

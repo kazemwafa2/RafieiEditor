@@ -166,6 +166,8 @@ class Dyn {
     var gb = 1f
     var sx = 1f
     var sy = 1f
+    var sepia = 0f
+    var lift = 0f
 }
 
 object Fx {
@@ -234,8 +236,20 @@ object Fx {
         FxDef("cinema", "نوار سینما", "Cinema bars", true, 0xFF212121.toInt()),
         FxDef("frame", "قاب", "Frame", true, 0xFFFAFAFA.toInt()),
         FxDef("dust", "گردوغبار", "Dust", true, 0xFFD7CCC8.toInt()),
-        FxDef("stars", "ستاره", "Stars", true, 0xFFFFD740.toInt())
-    )
+        FxDef("stars", "ستاره", "Stars", true, 0xFFFFD740.toInt()),
+        FxDef("lomo", "لومو", "Lomo", false, 0xFFFF7043.toInt()),
+        FxDef("bwfilm", "فیلم سیاه‌وسفید", "B&W film", false, 0xFF9E9E9E.toInt()),
+        FxDef("papertear", "کاغذ پاره", "Paper tear", true, 0xFFF5F0E6.toInt()),
+        FxDef("butterflies", "پروانه‌ها", "Butterflies", true, 0xFF29B6F6.toInt()),
+        FxDef("elecframe", "برق دور قاب", "Electric frame", true, 0xFFE040FB.toInt()),
+        FxDef("sparkhalo", "هالهٔ درخشان", "Sparkle halo", true, 0xFFFFFFFF.toInt()),
+        FxDef("p_outline", "خط درخشان دور بدن (هوشمند)", "Body outline glow (smart)", true, 0xFFE040FB.toInt()),
+        FxDef("p_electric", "برق دور بدن (هوشمند)", "Body lightning (smart)", true, 0xFFB388FF.toInt()),
+        FxDef("p_sparkle", "درخشش دور بدن (هوشمند)", "Body sparkles (smart)", true, 0xFFFFFFFF.toInt()),
+        FxDef("p_butterfly", "پروانه دور سوژه (هوشمند)", "Butterflies around person (smart)", true, 0xFF29B6F6.toInt()),
+        FxDef("light", "نور استودیو (بازه‌ای)", "Studio light (range)", true, 0xFFFFE6C8.toInt()),
+        FxDef("mask", "ماسک (بازه‌ای)", "Mask (range)", true, 0xFF90CAF9.toInt())
+    ) + FILTERS.filter { it.id != "none" }.map { FxDef("flt_" + it.id, it.fa, it.en, false, 0xFF90A4AE.toInt()) }
 
     fun fxDef(id: String): FxDef {
         for (f in FX_LIST) if (f.id == id) return f
@@ -414,6 +428,19 @@ object Fx {
         val tt = (tg - f.startMs).toFloat()
         val u = clampF(tt / Math.max(1L, f.durMs).toFloat(), 0f, 1f)
         val a = f.amt
+        if (f.fx.startsWith("flt_")) {
+            // a filter that lasts only for this part of the timeline
+            val fd = filter(f.fx.substring(4))
+            val k = clampF(a, 0f, 1f)
+            d.sat *= lerp(1f, fd.sat, k)
+            d.hue += fd.hue * k
+            d.gr *= lerp(1f, fd.r, k); d.gg *= lerp(1f, fd.g, k); d.gb *= lerp(1f, fd.b, k)
+            d.sepia += fd.sepia * k
+            d.contrast *= 1f + fd.contrast * k
+            d.bright += fd.bright * k
+            d.lift += fd.fade * k
+            return
+        }
         when (f.fx) {
             "flash" -> {
                 val ph = (tt % 700f) / 700f
@@ -467,6 +494,8 @@ object Fx {
                 if (ph > 0.9f) d.dark += a * (1f - Math.abs(ph - 0.95f) / 0.05f)
             }
             "dim" -> d.dark += 0.55f * a
+            "lomo" -> { d.sat *= 1f + 0.5f * a; d.dark += 0.06f * a; d.hue += 6f * a }
+            "bwfilm" -> { d.sat *= 1f - clampF(a * 1.5f, 0f, 1f); d.dark += 0.05f * a }
         }
     }
 
@@ -480,6 +509,10 @@ object Fx {
     }
 
     fun applyDynColor(x: ColorXf, d: Dyn) {
+        if (Math.abs(d.gr - 1f) > 0.001f || Math.abs(d.gg - 1f) > 0.001f || Math.abs(d.gb - 1f) > 0.001f) x.gain(d.gr, d.gg, d.gb)
+        if (d.sepia > 0.001f) x.sepia(clampF(d.sepia, 0f, 1f))
+        if (Math.abs(d.contrast - 1f) > 0.001f) x.contrast(d.contrast)
+        if (d.lift > 0.001f) x.lift(d.lift)
         x.hue(d.hue)
         x.sat(d.sat)
         x.invert(d.invert)

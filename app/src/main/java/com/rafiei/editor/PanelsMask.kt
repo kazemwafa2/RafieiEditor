@@ -9,13 +9,13 @@ import android.widget.ScrollView
 import android.widget.TextView
 
 /** Shape mask of the selected clip. */
-fun EditorActivity.openMaskPanel() {
-    val c = targetClip() ?: return
-    val m = ClipMask.fromJson(c.mask)
+fun EditorActivity.openMaskPanel(fxT: FxItem? = null) {
+    val c = if (fxT == null) (targetClip() ?: return) else null
+    val m = ClipMask.fromJson(if (fxT != null) fxT.cfg else c!!.mask)
     val content = FrameLayout(this)
 
     fun push() {
-        c.mask = if (m.shape == "none") "" else m.toJson()
+        if (fxT != null) fxT.cfg = m.toJson() else c!!.mask = if (m.shape == "none") "" else m.toJson()
         stage.top.invalidate()
         engine.refresh()
     }
@@ -85,7 +85,7 @@ fun EditorActivity.openMaskPanel() {
                 stage.top.invalidate(); engine.refresh()
                 toast(L("روی همه کلیپ‌ها اعمال شد", "Applied to all clips"))
             }, FrameLayout.LayoutParams(WRAP, WRAP))
-            inner.addView(all, lp(MATCH, WRAP))
+            if (fxT == null) inner.addView(all, lp(MATCH, WRAP))
             sv.addView(inner)
             col.addView(sv, lp(MATCH, dp(230)))
         }
