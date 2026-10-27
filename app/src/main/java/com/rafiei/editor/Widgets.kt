@@ -167,7 +167,7 @@ class ToolBtn(ctx: Context, icon: String, label: String, val widthDp: Int = 66, 
 }
 
 /** Horizontally scrolling row of text chips. */
-class ChipRow(ctx: Context, items: List<String>, selected: Int, val onSelect: (Int) -> Unit) : HorizontalScrollView(ctx) {
+class ChipRow(ctx: Context, items: List<String>, selected: Int, typefaces: List<android.graphics.Typeface?>? = null, val onSelect: (Int) -> Unit) : HorizontalScrollView(ctx) {
     private val row = ctx.lin(false)
     private val chips = ArrayList<TextView>()
     var sel = selected
@@ -177,7 +177,8 @@ class ChipRow(ctx: Context, items: List<String>, selected: Int, val onSelect: (I
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(ctx.dp(8), ctx.dp(4), ctx.dp(8), ctx.dp(4))
         for (i in items.indices) {
-            val t = ctx.tv(items[i], 12.5f, C.TXT)
+            val t = ctx.tv(items[i], if (typefaces != null) 15f else 12.5f, C.TXT)
+            if (typefaces != null && i < typefaces.size && typefaces[i] != null) t.typeface = typefaces[i]
             t.setPadding(ctx.dp(14), ctx.dp(7), ctx.dp(14), ctx.dp(7))
             t.setOnClickListener {
                 select(i)

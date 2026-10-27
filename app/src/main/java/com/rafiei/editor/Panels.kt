@@ -523,12 +523,11 @@ fun EditorActivity.openTextPanel(existing: Overlay?, startTab: Int?) {
             }
             1 -> {
                 val names = ArrayList<String>()
-                names.addAll(Fonts.BUILTIN)
-                names.addAll(Fonts.imported(this))
+                names.addAll(Fonts.all(this))
                 val row = lin(false)
                 row.setPadding(dp(8), dp(6), dp(8), dp(6))
                 for (n in names) {
-                    val chip = tv(Fonts.displayName(n) + " Aa", 14f, if (t.font == n) Color.WHITE else C.TXT)
+                    val chip = tv(Fonts.displayName(n) + " ابپ", 14f, if (t.font == n) Color.WHITE else C.TXT)
                     chip.typeface = Fonts.get(n, false, false)
                     chip.setPadding(dp(14), dp(10), dp(14), dp(10))
                     chip.background = roundedBg(if (t.font == n) C.ACCENT else C.CARD, dpf(16f))

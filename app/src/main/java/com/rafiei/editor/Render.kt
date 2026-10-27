@@ -26,6 +26,46 @@ object Fonts {
 
     fun fontsDir(c: Context): File = dirOf(c, "fonts")
 
+    /** Real fonts bundled in assets/fonts (downloaded at build time). */
+    private val FA_NAMES = linkedMapOf(
+        "Vazirmatn" to ("وزیرمتن (ساده و مدرن)" to "Vazirmatn"),
+        "NotoNastaliqUrdu" to ("نستعلیق" to "Nastaliq"),
+        "Amiri" to ("امیری (نسخ کلاسیک)" to "Amiri Naskh"),
+        "AmiriBold" to ("امیری ضخیم" to "Amiri Bold"),
+        "ScheherazadeNew" to ("شهرزاد (نسخ)" to "Scheherazade"),
+        "NotoNaskhArabic" to ("نسخ" to "Naskh"),
+        "ArefRuqaa" to ("خوش‌نویسی رقعه" to "Ruqaa calligraphy"),
+        "ArefRuqaaBold" to ("رقعه ضخیم" to "Ruqaa bold"),
+        "Katibeh" to ("خوش‌نویسی کاتبه" to "Katibeh calligraphy"),
+        "Lalezar" to ("لاله‌زار (تیتر تزئینی)" to "Lalezar display"),
+        "Rakkas" to ("رکاس (تیتر ضخیم)" to "Rakkas"),
+        "ReemKufi" to ("کوفی" to "Kufi"),
+        "Harmattan" to ("هرماتان" to "Harmattan"),
+        "MarkaziText" to ("مرکزی (سریف)" to "Markazi serif"),
+        "Mirza" to ("میرزا" to "Mirza"),
+        "Tajawal" to ("تجوال" to "Tajawal"),
+        "TajawalBold" to ("تجوال ضخیم" to "Tajawal bold"),
+        "Lateef" to ("لطیف" to "Lateef"),
+        "ElMessiri" to ("المسیری" to "El Messiri"),
+        "Jomhuria" to ("جمهوریه" to "Jomhuria")
+    )
+
+    fun assetFonts(c: Context): List<String> {
+        return try {
+            val have = (c.assets.list("fonts") ?: emptyArray()).map { it.substringBeforeLast('.') }.toSet()
+            val out = ArrayList<String>()
+            for (k in FA_NAMES.keys) if (k in have) out.add("asset:$k")
+            for (k in have.sorted()) if (!FA_NAMES.containsKey(k)) out.add("asset:$k")
+            out
+        } catch (e: Throwable) { emptyList() }
+    }
+
+    /** All fonts the user can pick: real bundled fonts first, then the system ones, then imported. */
+    fun all(c: Context): List<String> = assetFonts(c) + BUILTIN + imported(c)
+
+    /** Good default for Persian text: Vazirmatn when it is bundled. */
+    fun defaultFa(c: Context): String = if (assetFonts(c).contains("asset:Vazirmatn")) "asset:Vazirmatn" else "sans"
+
     fun imported(c: Context): List<String> {
         val out = ArrayList<String>()
         val fs = fontsDir(c).listFiles() ?: return out
@@ -36,6 +76,7 @@ object Fonts {
 
     fun displayName(n: String): String {
         if (n.startsWith("file:")) return n.substring(5).substringBeforeLast('.')
+        if (n.startsWith("asset:")) { val k = n.substring(6); val p = FA_NAMES[k]; return if (p != null) L(p.first, p.second) else k }
         return when (n) {
             "sans" -> L("ساده", "Sans")
             "serif" -> L("سریف", "Serif")
@@ -58,7 +99,9 @@ object Fonts {
         if (hit != null) return hit
         var tf: Typeface
         try {
-            if (name.startsWith("file:")) {
+            if (name.startsWith("asset:")) {
+                tf = Typeface.create(Typeface.createFromAsset(App.ctx.assets, "fonts/" + name.substring(6) + ".ttf"), style)
+            } else if (name.startsWith("file:")) {
                 val f = File(fontsDir(App.ctx), name.substring(5))
                 tf = Typeface.create(Typeface.createFromFile(f), style)
             } else {

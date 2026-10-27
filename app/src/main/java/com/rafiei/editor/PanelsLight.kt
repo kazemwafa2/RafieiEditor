@@ -232,7 +232,7 @@ fun EditorActivity.openSubtitlePanel() {
     var cx = first?.cx ?: 0.5f
     var color = first?.color ?: Color.WHITE
     var bgA = first?.bgAlpha ?: 0.45f
-    var font = first?.font ?: "sans"
+    var font = first?.font ?: Fonts.defaultFa(this)
     val total = Math.max(proj.totalMs(), 1000L)
     var tapIndex = -1
 
@@ -441,8 +441,8 @@ fun EditorActivity.openSubtitlePanel() {
     inner.addView(SliderRow(this, L("چپ / راست", "Position X"), 10f, 90f, cx * 100f, false, { Math.round(it).toString() }, { v -> cx = v / 100f; restyle() }), lp(MATCH, WRAP))
     inner.addView(SliderRow(this, L("پس‌زمینه تیره", "Background"), 0f, 100f, bgA * 100f, false, { Math.round(it).toString() + "%" }, { v -> bgA = v / 100f; restyle() }), lp(MATCH, WRAP))
     inner.addView(ColorRow(this, color) { c2 -> color = c2; restyle() }, lp(MATCH, WRAP))
-    val fonts = Fonts.BUILTIN + Fonts.imported(this)
-    inner.addView(ChipRow(this, fonts.map { Fonts.displayName(it) }, Math.max(0, fonts.indexOf(font))) { i -> font = fonts[i]; restyle() }, lp(MATCH, WRAP))
+    val fonts = Fonts.all(this)
+    inner.addView(ChipRow(this, fonts.map { Fonts.displayName(it) + " ابپ" }, Math.max(0, fonts.indexOf(font)), fonts.map { Fonts.get(it, false, false) }) { i -> font = fonts[i]; restyle() }, lp(MATCH, WRAP))
 
     // saved favourite looks
     val prefs = getSharedPreferences("subtpl", 0)

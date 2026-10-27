@@ -103,6 +103,47 @@ object AutoSub {
         }
     }
 
+    /**
+     * Finds the parts that contain speech (energy based) so each piece is recognised on its own and the
+     * subtitle starts exactly when the speech starts. Returns [from, to) sample ranges at 16 kHz.
+     */
+    fun segments(pcm: ShortArray): List<IntArray> {
+        val fr = 320 // 20 ms
+        val n = pcm.size / fr
+        if (n < 5) return emptyList()
+        val e = DoubleArray(n)
+        for (i in 0 until n) e[i] = rms(pcm, i * fr, i * fr + fr)
+        val sorted = e.sortedArray()
+        val floor = sorted[(n * 0.2).toInt()]
+        val peak = sorted[Math.min(n - 1, (n * 0.95).toInt())]
+        val thr = Math.max(0.006, floor + (peak - floor) * 0.15)
+        val segs = ArrayList<IntArray>()
+        var i = 0
+        while (i < n) {
+            if (e[i] > thr) {
+                var j = i
+                var last = i
+                while (j < n && j - last < 25) { if (e[j] > thr) last = j; j++ } // silence of 0.5 s ends a piece
+                segs.add(intArrayOf(i, last + 1))
+                i = last + 1
+            } else i++
+        }
+        val out = ArrayList<IntArray>()
+        for (s in segs) {
+            var a = s[0]
+            val b = s[1]
+            if (b - a < 12) continue // shorter than 0.24 s: a click, not speech
+            while (b - a > 500) { // longer than 10 s: cut at the quietest frame between 7 and 10 s
+                var best = a + 350
+                for (k in a + 350..a + 500) if (e[k] < e[best]) best = k
+                out.add(intArrayOf(Math.max(0, a - 6) * fr, Math.min(n, best + 6) * fr))
+                a = best
+            }
+            out.add(intArrayOf(Math.max(0, a - 6) * fr, Math.min(n, b + 6) * fr))
+        }
+        return out
+    }
+
     fun rms(a: ShortArray, from: Int, to: Int): Double {
         var s = 0.0
         for (i in from until to) s += a[i].toDouble() * a[i]
@@ -336,6 +377,7 @@ fun EditorActivity.openAutoSubPanel() {
         val ts = c.trimStart
         val te = c.trimEnd
         val speed = c.speed
+        try { engine.pause() } catch (e: Throwable) { }
         val dlg: AlertDialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setMessage(L("در حال خواندن صدا…", "Reading audio…")).setCancelable(false)
             .setNegativeButton(L("توقف", "Stop")) { _, _ -> AutoSub.cancelFlag = true }.create().also { it.show() }
@@ -346,8 +388,8 @@ fun EditorActivity.openAutoSubPanel() {
                     dlg.dismiss()
                     toast(L("صدای این کلیپ خوانده نشد.", "Could not read this clip's audio."))
                 } else {
-                    val chunk = 16000 * 6
-                    val total = (pcm.size + chunk - 1) / chunk
+                    val segs = AutoSub.segments(pcm)
+                    val total = segs.size
                     val lines = ArrayList<Triple<Long, Long, String>>()
                     var k = 0
                     lateinit var step: () -> Unit
@@ -365,7 +407,7 @@ fun EditorActivity.openAutoSubPanel() {
                                 proj.overlays.removeAll { it.kind == "text" && it.glyph == "sub" }
                                 for (l in lines) {
                                     val o = Overlay()
-                                    o.kind = "text"; o.glyph = "sub"; o.text = l.third
+                                    o.kind = "text"; o.glyph = "sub"; o.text = l.third; o.font = Fonts.defaultFa(applicationContext)
                                     o.startMs = l.first; o.durMs = Math.max(500L, l.second - l.first)
                                     o.size = 0.05f; o.cx = 0.5f; o.cy = 0.86f; o.color = Color.WHITE
                                     o.bgColor = Color.BLACK; o.bgAlpha = 0.45f; o.bold = true
@@ -377,13 +419,13 @@ fun EditorActivity.openAutoSubPanel() {
                                 openSubtitlePanel()
                             }
                         } else {
-                            val from = k * chunk
-                            val to = Math.min(pcm.size, from + chunk)
+                            val from = segs[k][0]
+                            val to = Math.min(pcm.size, segs[k][1])
                             dlg.setMessage(L("در حال تشخیص گفتار… ${k + 1} از $total", "Recognising speech… ${k + 1} of $total"))
                             val t0 = clipStart + ((from / 16f) / speed).toLong()
                             val t1 = clipStart + ((to / 16f) / speed).toLong()
                             k++
-                            if (AutoSub.rms(pcm, from, to) < 0.004) step() else {
+                            if (false) step() else {
                                 fun got(t: String?) {
                                     if (!t.isNullOrBlank()) lines.add(Triple(t0, t1, t.trim()))
                                     step()

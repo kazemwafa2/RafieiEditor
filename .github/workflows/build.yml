@@ -22,6 +22,32 @@ jobs:
           if [ ! -f rafiei.jks ]; then
             keytool -genkeypair -v -keystore rafiei.jks -storepass rafiei123 -keypass rafiei123 -alias rafiei -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Rafiei Editor, O=Rafiei, C=AF"
           fi
+      - name: Download real Persian/Arabic fonts (SIL OFL) into the app
+        run: |
+          mkdir -p app/src/main/assets/fonts
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl
+          get() { curl -fsSL --retry 3 --max-time 120 -o "app/src/main/assets/fonts/$2" "$B/$1" && echo "ok $2" || { echo "MISSING $2"; rm -f "app/src/main/assets/fonts/$2"; }; }
+          get "vazirmatn/Vazirmatn%5Bwght%5D.ttf" Vazirmatn.ttf
+          get "notonastaliqurdu/NotoNastaliqUrdu%5Bwght%5D.ttf" NotoNastaliqUrdu.ttf
+          get "amiri/Amiri-Regular.ttf" Amiri.ttf
+          get "amiri/Amiri-Bold.ttf" AmiriBold.ttf
+          get "arefruqaa/ArefRuqaa-Regular.ttf" ArefRuqaa.ttf
+          get "arefruqaa/ArefRuqaa-Bold.ttf" ArefRuqaaBold.ttf
+          get "katibeh/Katibeh-Regular.ttf" Katibeh.ttf
+          get "lalezar/Lalezar-Regular.ttf" Lalezar.ttf
+          get "reemkufi/ReemKufi%5Bwght%5D.ttf" ReemKufi.ttf
+          get "scheherazadenew/ScheherazadeNew-Regular.ttf" ScheherazadeNew.ttf
+          get "harmattan/Harmattan-Regular.ttf" Harmattan.ttf
+          get "markazitext/MarkaziText%5Bwght%5D.ttf" MarkaziText.ttf
+          get "mirza/Mirza-Regular.ttf" Mirza.ttf
+          get "rakkas/Rakkas-Regular.ttf" Rakkas.ttf
+          get "tajawal/Tajawal-Regular.ttf" Tajawal.ttf
+          get "tajawal/Tajawal-Bold.ttf" TajawalBold.ttf
+          get "lateef/Lateef-Regular.ttf" Lateef.ttf
+          get "elmessiri/ElMessiri%5Bwght%5D.ttf" ElMessiri.ttf
+          get "notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf" NotoNaskhArabic.ttf
+          get "jomhuria/Jomhuria-Regular.ttf" Jomhuria.ttf
+          ls -la app/src/main/assets/fonts || true
       - name: Build release APK
         run: gradle assembleRelease --no-daemon --stacktrace
       - name: Upload APK
