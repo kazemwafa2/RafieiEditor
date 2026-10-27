@@ -48,6 +48,11 @@ jobs:
           get "notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf" NotoNaskhArabic.ttf
           get "jomhuria/Jomhuria-Regular.ttf" Jomhuria.ttf
           ls -la app/src/main/assets/fonts || true
+      - name: Download the offline Persian speech model (Vosk, Apache-2.0)
+        run: |
+          mkdir -p app/src/main/assets/vosk
+          curl -fsSL --retry 3 --max-time 600 -o app/src/main/assets/vosk/fa.zip https://alphacephei.com/vosk/models/vosk-model-small-fa-0.42.zip && echo "ok vosk fa" || { echo "MISSING vosk fa"; rm -f app/src/main/assets/vosk/fa.zip; }
+          ls -la app/src/main/assets/vosk || true
       - name: Build release APK
         run: gradle assembleRelease --no-daemon --stacktrace
       - name: Upload APK

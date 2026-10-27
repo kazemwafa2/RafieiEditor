@@ -389,6 +389,95 @@ fun EditorActivity.openSubtitlePanel() {
         refreshTap()
     }
 
+
+    /** One button: paste all lyrics, the app finds the singing/speech and the pauses in the audio and places every line itself. */
+    fun autoSync() {
+        val tl = textLines().map { Regex("^\\[?\\d+:\\d+(?:[.,]\\d+)?\\]?\\s*").replace(it, "") }.filter { it.isNotBlank() }
+        if (tl.isEmpty()) { toast(L("ابتدا متن را بنویسید یا بچسبانید.", "Paste the lyrics first.")); return }
+        var path = ""; var from = 0L; var to = 0L; var base = 0L; var speed = 1f
+        val au = proj.audios.firstOrNull { it.kind == "music" } ?: proj.audios.firstOrNull { it.kind == "voice" } ?: proj.audios.firstOrNull()
+        if (au != null) {
+            path = MediaUtil.pathOf(au.uri); from = au.trimStart; to = if (au.trimEnd > au.trimStart) au.trimEnd else au.srcDurMs
+            base = au.startMs; speed = if (au.speed > 0.05f) au.speed else 1f
+        } else {
+            val ci = proj.clips.indexOfFirst { !it.isImage && it.hasAudio }
+            if (ci < 0) { toast(L("آهنگ یا کلیپ دارای صدا لازم است.", "A song or a clip with audio is needed.")); return }
+            val c = proj.clips[ci]
+            path = MediaUtil.pathOf(c.uri); from = c.trimStart; to = if (c.trimEnd > c.trimStart) c.trimEnd else c.srcDurMs
+            base = proj.clipStart(ci); speed = if (c.speed > 0.05f) c.speed else 1f
+        }
+        val playhead = engine.timeMs
+        try { engine.pause() } catch (e: Throwable) { }
+        val dlg = android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setMessage(L("در حال تحلیل صدا و جای‌گذاری خطوط…", "Analysing the audio and placing the lines…")).setCancelable(false).create()
+        dlg.show()
+        val p0 = path; val f0 = from; val t0 = to; val b0 = base; val sp0 = speed
+        Bg.run {
+            val pcm = AutoSub.decode16k(p0, f0, t0)
+            val res = ArrayList<Long>()
+            if (pcm != null && pcm.size > 16000) {
+                val fr = 320
+                val n = pcm.size / fr
+                val raw = DoubleArray(n)
+                for (i in 0 until n) raw[i] = AutoSub.rms(pcm, i * fr, i * fr + fr)
+                val e = DoubleArray(n)
+                for (i in 0 until n) { var a = 0.0; var k = 0; for (j in Math.max(0, i - 2)..Math.min(n - 1, i + 2)) { a += raw[j]; k++ }; e[i] = a / k }
+                val sorted = e.sortedArray()
+                val floor = sorted[(n * 0.1).toInt()]
+                val peak = sorted[Math.min(n - 1, (n * 0.95).toInt())]
+                val thr = floor + (peak - floor) * 0.12
+                var s0 = Math.max(0L, ((playhead - b0) * sp0 / 20f).toLong()).toInt()
+                if (s0 >= n - 10) s0 = 0
+                while (s0 < n - 1 && e[s0] <= thr) s0++
+                var e0 = n - 1
+                while (e0 > s0 + 10 && e[e0] <= thr) e0--
+                val span = Math.max(1, e0 - s0)
+                val w = DoubleArray(tl.size) { Math.max(3, tl[it].replace(" ", "").length).toDouble() }
+                val tot = w.sum()
+                val lineF = span.toDouble() / tl.size
+                val win = Math.max(20.0, Math.min(250.0, lineF * 0.4)).toInt()
+                val minLine = Math.max(15, (lineF * 0.25).toInt())
+                val bounds = IntArray(tl.size)
+                bounds[0] = s0
+                var cum = 0.0
+                for (k in 1 until tl.size) {
+                    cum += w[k - 1]
+                    val ideal = s0 + (span * cum / tot).toInt()
+                    var best = -1
+                    var bestScore = Double.MAX_VALUE
+                    val lo = Math.max(bounds[k - 1] + minLine, ideal - win)
+                    val hi = Math.min(e0 - 5, ideal + win)
+                    var i = lo
+                    while (i <= hi) {
+                        val sc = e[i] / Math.max(1e-6, peak) + 0.35 * Math.abs(i - ideal).toDouble() / win
+                        if (sc < bestScore) { bestScore = sc; best = i }
+                        i++
+                    }
+                    if (best < 0) best = Math.max(bounds[k - 1] + minLine, Math.min(n - 1, ideal))
+                    // the line starts where sound returns after the pause
+                    var j = best
+                    val lim = Math.min(n - 1, best + 40)
+                    while (j < lim && e[j] < e[best] + (peak - floor) * 0.12) j++
+                    bounds[k] = Math.max(bounds[k - 1] + minLine, j)
+                }
+                for (k in 0 until tl.size) res.add(b0 + (bounds[k] * 20L / sp0).toLong())
+            }
+            Bg.ui {
+                dlg.dismiss()
+                if (res.size != tl.size) {
+                    toast(L("صدا خوانده نشد؛ خطوط مساوی پخش شد.", "Could not read the audio; spread evenly."))
+                    loadFromInput(false)
+                } else {
+                    lines.clear()
+                    for (k in tl.indices) lines.add(SubLine(res[k], tl[k]))
+                    tapIndex = -1
+                    rebuild(); refreshRows(); refreshTap()
+                    toast(L("${tl.size} خط روی آهنگ قرار گرفت. اگر خطی جابه‌جاست، فقط عدد زمانش را اصلاح کنید یا «زمان‌بندی با ضربه» را بزنید.", "${tl.size} lines placed. Fix any time by editing its number, or use Tap to time."))
+                }
+            }
+        }
+    }
+
     val col = lin(true)
     val sv = ScrollView(this)
     val inner = lin(true)
@@ -420,6 +509,11 @@ fun EditorActivity.openSubtitlePanel() {
             refreshTap()
         }
     }, bl())
+    val btnsA = FrameLayout(this)
+    btnsA.setPadding(dp(10), dp(2), dp(10), dp(4))
+    btnsA.addView(ltPill(L("✨ همگام‌سازی خودکار با آهنگ", "✨ Auto-sync to the song"), true) { autoSync() }, FrameLayout.LayoutParams(MATCH, WRAP))
+    inner.addView(btnsA, lp(MATCH, WRAP))
+    inner.addView(ltCaption(L("متن را بچسبانید، نشانگر را روی شروع خواندن بگذارید و دکمه را بزنید؛ خودش شروع هر خط را از روی مکث‌های آهنگ پیدا می‌کند.", "Paste lyrics, put the playhead where singing starts, tap the button; line starts are found from the pauses in the song.")), lp(MATCH, WRAP))
     inner.addView(btns, lp(MATCH, WRAP))
     tapBox = lin(true)
     inner.addView(tapBox, lp(MATCH, WRAP))

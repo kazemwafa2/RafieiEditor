@@ -89,3 +89,9 @@
 ## v16
 - فونت‌های واقعی (OFL) هنگام بیلد از google/fonts دانلود و در assets/fonts گذاشته می‌شوند: وزیرمتن، نستعلیق (Noto Nastaliq Urdu)، امیری، شهرزاد، نسخ، رقعه (Aref Ruqaa)، کاتبه، لاله‌زار، کوفی و…؛ نام هر فونت با خود فونت نمایش داده می‌شود. اگر دانلود در بیلد شکست بخورد، همان فونت در فهرست نمی‌آید.
 - زیرنویس خودکار: فقط بخش‌های دارای گفتار (تشخیص فعالیت صدا)؛ شروع/پایان هر زیرنویس با آغاز و پایان گفتار؛ پخش ویرایشگر هنگام تشخیص متوقف می‌شود.
+
+## v17 — Auto subtitles rebuilt (offline Vosk)
+- Speech is read straight from the clip's audio file (no mic, no speaker, no Google service, no playback) and recognised offline with Vosk; every word has its own start/end time, so each subtitle appears exactly when speech starts.
+- Persian small model (~53 MB) is downloaded by CI into assets/vosk/fa.zip and unpacked on first use; other languages (EN/TR/RU/HI) can be downloaded with consent, or any Vosk model .zip can be picked from the phone.
+- Works for clear speech/recitation; singing and loud music are poorly recognised — use the manual subtitle panel (paste text + tap timing) for songs.
+- v17b: Subtitle panel → "Auto-sync to the song": paste all lyrics, put playhead at first vocal, one tap; the app analyses the audio energy, finds the sung/spoken span and the pauses, and places every line start at the matching pause (weighted by line length). Times stay editable; "Tap to time" remains for fine-tuning.
