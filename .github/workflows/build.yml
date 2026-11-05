@@ -1,0 +1,107 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      # ---------------------------------------------------------------------------
+      # Signing: the keystore is NOT in this repository.
+      # Option A (recommended for releases): add these repository secrets —
+      #   KEYSTORE_BASE64   : base64 of your .jks file  (base64 -w0 rafiei.jks)
+      #   KEYSTORE_PASSWORD : the keystore password
+      #   KEY_ALIAS         : the key alias (e.g. rafiei)
+      #   KEY_PASSWORD      : the key password
+      # Option B (testing only): with no secrets, a throwaway CI-local keystore is
+      # generated so the pipeline still produces installable test builds.
+      # ---------------------------------------------------------------------------
+      - name: Restore signing key from secrets (or create a CI-local test key)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > rafiei.jks
+            {
+              echo "storeFile=${{ github.workspace }}/rafiei.jks"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > keystore.properties
+            echo "Signed with the secret keystore (release keystore restored)."
+          else
+            keytool -genkeypair -v -keystore ci-test.jks -storepass ci-test-pass -keypass ci-test-pass \
+              -alias ci-test -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Rafiei Editor CI Test, O=Rafiei, C=AF"
+            {
+              echo "storeFile=${{ github.workspace }}/ci-test.jks"
+              echo "storePassword=ci-test-pass"
+              echo "keyAlias=ci-test"
+              echo "keyPassword=ci-test-pass"
+            } > keystore.properties
+            echo "WARNING: no KEYSTORE_BASE64 secret found -> build signed with a throwaway CI-local key." >> "$GITHUB_STEP_SUMMARY"
+            echo "         Install these APKs for testing only; they cannot be updated over a store build." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Download real Persian/Arabic fonts (SIL OFL) into the app
+        run: |
+          mkdir -p app/src/main/assets/fonts
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl
+          get() { curl -fsSL --retry 3 --max-time 120 -o "app/src/main/assets/fonts/$2" "$B/$1" && echo "ok $2" || { echo "MISSING $2"; rm -f "app/src/main/assets/fonts/$2"; }; }
+          get "vazirmatn/Vazirmatn%5Bwght%5D.ttf" Vazirmatn.ttf
+          get "notonastaliqurdu/NotoNastaliqUrdu%5Bwght%5D.ttf" NotoNastaliqUrdu.ttf
+          get "amiri/Amiri-Regular.ttf" Amiri.ttf
+          get "amiri/Amiri-Bold.ttf" AmiriBold.ttf
+          get "arefruqaa/ArefRuqaa-Regular.ttf" ArefRuqaa.ttf
+          get "arefruqaa/ArefRuqaa-Bold.ttf" ArefRuqaaBold.ttf
+          get "katibeh/Katibeh-Regular.ttf" Katibeh.ttf
+          get "lalezar/Lalezar-Regular.ttf" Lalezar.ttf
+          get "reemkufi/ReemKufi%5Bwght%5D.ttf" ReemKufi.ttf
+          get "scheherazadenew/ScheherazadeNew-Regular.ttf" ScheherazadeNew.ttf
+          get "harmattan/Harmattan-Regular.ttf" Harmattan.ttf
+          get "markazitext/MarkaziText%5Bwght%5D.ttf" MarkaziText.ttf
+          get "mirza/Mirza-Regular.ttf" Mirza.ttf
+          get "rakkas/Rakkas-Regular.ttf" Rakkas.ttf
+          get "tajawal/Tajawal-Regular.ttf" Tajawal.ttf
+          get "tajawal/Tajawal-Bold.ttf" TajawalBold.ttf
+          get "lateef/Lateef-Regular.ttf" Lateef.ttf
+          get "elmessiri/ElMessiri%5Bwght%5D.ttf" ElMessiri.ttf
+          get "notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf" NotoNaskhArabic.ttf
+          get "jomhuria/Jomhuria-Regular.ttf" Jomhuria.ttf
+          ls -la app/src/main/assets/fonts || true
+
+      - name: Download the offline Persian speech model (Vosk, Apache-2.0)
+        run: |
+          mkdir -p app/src/main/assets/vosk
+          curl -fsSL --retry 3 --max-time 600 -o app/src/main/assets/vosk/fa.zip https://alphacephei.com/vosk/models/vosk-model-small-fa-0.42.zip && echo "ok vosk fa" || { echo "MISSING vosk fa"; rm -f app/src/main/assets/vosk/fa.zip; }
+          ls -la app/src/main/assets/vosk || true
+
+      - name: Install CMake for the native speech engine (whisper.cpp)
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "cmake;3.22.1" > /dev/null 2>&1 || echo "cmake install skipped"
+
+      - name: Build release APK (with whisper.cpp; falls back to Vosk-only if the native build fails)
+        run: |
+          gradle assembleRelease --no-daemon --stacktrace || { echo "NATIVE BUILD FAILED -> building without whisper.cpp"; gradle assembleRelease --no-daemon --stacktrace -PnoWhisper; }
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RafieiEditor-apk
+          path: app/build/outputs/apk/release/*.apk

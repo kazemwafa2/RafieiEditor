@@ -1,0 +1,183 @@
+package com.rafiei.editor
+
+import android.app.Application
+import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.View
+import java.io.File
+import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.Executors
+
+class App : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        ctx = applicationContext
+        Lang.init(this)
+        // Local crash log: only the stack trace is stored (never project files); the user decides whether to share it.
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                val info = "time=" + java.util.Date() + "\nandroid=" + android.os.Build.VERSION.SDK_INT + "\n" + sw.toString().take(6000)
+                java.io.File(filesDir, "last_crash.txt").writeText(info)
+            } catch (x: Throwable) {
+            }
+            prev?.uncaughtException(t, e)
+        }
+    }
+
+    companion object {
+        lateinit var ctx: Context
+    }
+}
+
+/** Language switch: Persian (default) or English. */
+object Lang {
+    var fa = true
+    fun init(c: Context) {
+        fa = c.getSharedPreferences("prefs", Context.MODE_PRIVATE).getBoolean("fa", true)
+    }
+
+    fun set(c: Context, v: Boolean) {
+        fa = v
+        c.getSharedPreferences("prefs", Context.MODE_PRIVATE).edit().putBoolean("fa", v).apply()
+    }
+}
+
+fun L(fa: String, en: String): String = if (Lang.fa) fa else en
+
+object C {
+    const val BG = 0xFF262626.toInt()
+    const val BG2 = 0xFF1C1C1C.toInt()
+    const val PANEL = 0xFF2F2F2F.toInt()
+    const val CARD = 0xFF3A3A3A.toInt()
+    const val TXT = 0xFFFFFFFF.toInt()
+    const val TXT2 = 0xFFA8A8A8.toInt()
+    const val ACCENT = 0xFFFF4D6D.toInt()
+    const val ACCENT2 = 0xFFFF8A5B.toInt()
+    const val GREEN = 0xFF00E096.toInt()
+    const val PURPLE = 0xFF9B6BD6.toInt()
+    const val BLUE = 0xFF4DA3FF.toInt()
+    const val YELLOW = 0xFFFFD93D.toInt()
+}
+
+object Bg {
+    private val pool = Executors.newFixedThreadPool(3)
+    private val main = Handler(Looper.getMainLooper())
+    fun run(block: () -> Unit) {
+        pool.execute {
+            try {
+                block()
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun ui(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post { block() }
+    }
+
+    fun postDelayed(ms: Long, block: () -> Unit) {
+        main.postDelayed({ block() }, ms)
+    }
+}
+
+fun uid(): String = UUID.randomUUID().toString().replace("-", "").take(10)
+
+fun Context.dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
+fun Context.dpf(v: Float): Float = v * resources.displayMetrics.density
+fun View.dp(v: Int): Int = context.dp(v)
+fun View.dpf(v: Float): Float = context.dpf(v)
+
+fun fmtTime(ms: Long): String {
+    val t = if (ms < 0) 0 else ms
+    val totalTenths = t / 100
+    val tenths = totalTenths % 10
+    val totalSec = totalTenths / 10
+    val s = totalSec % 60
+    val m = totalSec / 60
+    return String.format(Locale.US, "%d:%02d.%d", m, s, tenths)
+}
+
+fun fmtShort(ms: Long): String {
+    val totalSec = (ms + 500) / 1000
+    val s = totalSec % 60
+    val m = totalSec / 60
+    return if (m == 0L) String.format(Locale.US, ":%02d", s) else String.format(Locale.US, "%d:%02d", m, s)
+}
+
+fun roundedBg(color: Int, radiusPx: Float, strokeColor: Int = 0, strokePx: Int = 0): GradientDrawable {
+    val g = GradientDrawable()
+    g.shape = GradientDrawable.RECTANGLE
+    g.setColor(color)
+    g.cornerRadius = radiusPx
+    if (strokePx > 0) g.setStroke(strokePx, strokeColor)
+    return g
+}
+
+fun gradBg(c1: Int, c2: Int, radiusPx: Float, angle: GradientDrawable.Orientation = GradientDrawable.Orientation.TL_BR): GradientDrawable {
+    val g = GradientDrawable(angle, intArrayOf(c1, c2))
+    g.cornerRadius = radiusPx
+    return g
+}
+
+fun clampF(v: Float, a: Float, b: Float): Float = if (v < a) a else if (v > b) b else v
+fun clampL(v: Long, a: Long, b: Long): Long = if (v < a) a else if (v > b) b else v
+fun clampI(v: Int, a: Int, b: Int): Int = if (v < a) a else if (v > b) b else v
+
+fun mixColor(a: Int, b: Int, t: Float): Int {
+    val r = (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt()
+    val g = (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt()
+    val bl = (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt()
+    val al = (Color.alpha(a) + (Color.alpha(b) - Color.alpha(a)) * t).toInt()
+    return Color.argb(al, r, g, bl)
+}
+
+fun withAlpha(color: Int, a: Float): Int = Color.argb((clampF(a, 0f, 1f) * 255f).toInt(), Color.red(color), Color.green(color), Color.blue(color))
+
+/** Cheap deterministic pseudo-random number in 0..1 from an integer seed. */
+fun hashNoise(seed: Int): Float {
+    var x = seed * 374761393 + 668265263
+    x = (x xor (x ushr 13)) * 1274126177
+    x = x xor (x ushr 16)
+    return ((x and 0x7fffffff) % 100000) / 100000f
+}
+
+fun dirOf(c: Context, name: String): File {
+    val d = File(c.filesDir, name)
+    if (!d.exists()) d.mkdirs()
+    return d
+}
+
+/**
+ * Legacy storage permission (Android 7.0-9, API < 29): gallery saves and backups write into
+ * public directories, which needs WRITE_EXTERNAL_STORAGE granted at runtime. On API 29+ the
+ * permission is never requested and the callback runs immediately.
+ * The activity must override onRequestPermissionsResult and call Compat.onPermResult.
+ */
+object Compat {
+    const val REQ_STORAGE = 7001
+    private var after: (() -> Unit)? = null
+
+    fun ensureStorage(a: android.app.Activity, then: () -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 29) { then(); return }
+        val p = android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+        if (a.checkSelfPermission(p) == android.content.pm.PackageManager.PERMISSION_GRANTED) { then(); return }
+        after = then
+        a.requestPermissions(arrayOf(p), REQ_STORAGE)
+    }
+
+    fun onPermResult(a: android.app.Activity, requestCode: Int, grantResults: IntArray) {
+        if (requestCode != REQ_STORAGE) return
+        val cb = after
+        after = null
+        if (grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) cb?.invoke()
+        else android.widget.Toast.makeText(a, L("بدون اجازه‌ی ذخیره، فایل در گالری ذخیره نمی‌شود.", "Without the storage permission the file cannot be saved to the gallery."), android.widget.Toast.LENGTH_LONG).show()
+    }
+}

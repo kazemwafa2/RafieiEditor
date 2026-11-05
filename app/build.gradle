@@ -1,0 +1,109 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.rafiei.editor'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.rafiei.editor"
+        // Android 7.0 (API 24) up to Android 13+ (targetSdk 34).
+        // API 24-28 paths are handled in code: legacy gallery save (MediaUtil/Backup)
+        // and frame extraction without getScaledFrameAtTime (API 27+).
+        minSdk 24
+        targetSdk 34
+        versionCode 6
+        versionName "2.3.1"
+        ndk { abiFilters "arm64-v8a", "armeabi-v7a" }
+        // Pinned so the native whisper.cpp build uses the same NDK everywhere (CI auto-installs it);
+        // matches the prebuilt .cxx outputs, avoiding a full rebuild on this machine.
+        ndkVersion "26.1.10909125"
+    }
+
+    // Signing is loaded from keystore.properties (gitignored) or from environment
+    // variables set in CI (GitHub Actions secrets). No credentials live in this repo.
+    // To build a signed release locally, create keystore.properties next to this file:
+    //   storeFile=/absolute/path/to/rafiei.jks
+    //   storePassword=...
+    //   keyAlias=rafiei
+    //   keyPassword=...
+    def ksProps = new Properties()
+    def ksPropFile = rootProject.file("keystore.properties")
+    if (ksPropFile.exists()) {
+        ksPropFile.withInputStream { ksProps.load(it) }
+    } else if (System.getenv("KEYSTORE_FILE") != null) {
+        ksProps["storeFile"] = System.getenv("KEYSTORE_FILE")
+        ksProps["storePassword"] = System.getenv("KEYSTORE_PASSWORD")
+        ksProps["keyAlias"] = System.getenv("KEY_ALIAS")
+        ksProps["keyPassword"] = System.getenv("KEY_PASSWORD")
+    }
+    def ksFile = ksProps["storeFile"] != null ? rootProject.file(ksProps["storeFile"]) : null
+    def hasReleaseKey = ksFile != null && ksFile.exists()
+
+    signingConfigs {
+        release {
+            if (hasReleaseKey) {
+                storeFile ksFile
+                storePassword ksProps["storePassword"]
+                keyAlias ksProps["keyAlias"]
+                keyPassword ksProps["keyPassword"]
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig hasReleaseKey ? signingConfigs.release : signingConfigs.debug
+        }
+        debug {
+            signingConfig hasReleaseKey ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+    // whisper.cpp (native speech recognition). Build with -PnoWhisper to skip it (the app then uses Vosk only).
+    if (!project.hasProperty("noWhisper")) {
+        externalNativeBuild {
+            cmake {
+                path "src/main/cpp/CMakeLists.txt"
+                version "3.22.1"
+            }
+        }
+        defaultConfig {
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_BUILD_TYPE=Release"
+                }
+            }
+        }
+    }
+    androidResources { noCompress 'zip' }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    def media3 = "1.4.1"
+    implementation "androidx.core:core:1.13.1" // FileProvider for the update installer
+    implementation "androidx.media3:media3-common:$media3"
+    implementation "androidx.media3:media3-exoplayer:$media3"
+    implementation "androidx.media3:media3-transformer:$media3"
+    implementation "androidx.media3:media3-effect:$media3"
+    implementation "com.google.guava:guava:33.2.1-android"
+    // offline person segmentation (model is bundled) for the "around the body" effects
+    implementation "com.google.mlkit:segmentation-selfie:16.0.0-beta5"
+    // offline speech recognition (Kaldi / Vosk)
+    implementation "com.google.mlkit:translate:17.0.3"
+    implementation "com.alphacephei:vosk-android:0.3.47"
+    implementation "net.java.dev.jna:jna:5.13.0@aar"
+}
