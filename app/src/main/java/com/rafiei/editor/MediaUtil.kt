@@ -12,7 +12,9 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -139,6 +141,24 @@ object MediaUtil {
         val name = displayName(c, uri)
         val clip = Clip()
         if (isImage(c, uri)) {
+            // Probe the real format first: PNG/WebP/GIF must keep their original bytes,
+            // a JPEG re-encode would destroy transparency and add a generational loss.
+            val bo = BitmapFactory.Options()
+            bo.inJustDecodeBounds = true
+            try { c.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bo) } } catch (e: Throwable) { }
+            val mime = (bo.outMimeType ?: "").lowercase()
+            if (bo.outWidth > 0 && (mime.contains("png") || mime.contains("webp") || mime.contains("gif"))) {
+                val ext = if (mime.contains("png")) ".png" else if (mime.contains("gif")) ".gif" else ".webp"
+                val f = File(Store.mediaDir(c, pid), clip.id + ext)
+                if (!copyTo(c, uri, f)) return null
+                clip.uri = Uri.fromFile(f).toString()
+                clip.isImage = true
+                clip.w = bo.outWidth
+                clip.h = bo.outHeight
+                clip.hasAudio = false
+                clip.imgDur = 4000
+                return clip
+            }
             val bmp = loadBitmap(c, uri, 2560) ?: return null
             val f = File(Store.mediaDir(c, pid), clip.id + ".jpg")
             FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.JPEG, 93, it) }
@@ -223,6 +243,22 @@ object MediaUtil {
 
     fun pathOf(uri: String): String = Uri.parse(uri).path ?: uri
 
+    /**
+     * One video frame scaled to exactly w x h. Uses getScaledFrameAtTime on API 27+;
+     * on Android 7.x (API 24-26) it falls back to getFrameAtTime + a manual scale so the
+     * same features (reverse, person masks, TV shots) also work there.
+     */
+    fun frameScaled(mr: MediaMetadataRetriever, timeMs: Long, option: Int, w: Int, h: Int): Bitmap? {
+        if (Build.VERSION.SDK_INT >= 27) {
+            return try { mr.getScaledFrameAtTime(timeMs * 1000L, option, w, h) } catch (e: Throwable) { null }
+        }
+        val b = try { mr.getFrameAtTime(timeMs * 1000L, option) } catch (e: Throwable) { null } ?: return null
+        if (b.width == w && b.height == h) return b
+        val r = Bitmap.createScaledBitmap(b, w, h, true)
+        if (r !== b) b.recycle()
+        return r
+    }
+
     /** Grab one video frame (scaled so that the width is at most maxW). */
     fun frameAt(path: String, timeMs: Long, maxW: Int, exact: Boolean = false): Bitmap? {
         val mmr = MediaMetadataRetriever()
@@ -302,7 +338,24 @@ object MediaUtil {
 
     /** Saves a finished file into the public gallery (Movies/RafieiEditor or Pictures/RafieiEditor). */
     fun saveToGallery(c: Context, file: File, displayName: String, mime: String, video: Boolean): Uri? {
-        return try {
+        // Android 7.0-9 (API < 29): no scoped storage — write into the public directory directly
+        // and let MediaScanner index it. The WRITE_EXTERNAL_STORAGE permission is requested before export.
+        if (Build.VERSION.SDK_INT < 29) {
+            return try {
+                val base = Environment.getExternalStoragePublicDirectory(if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES)
+                val dir = File(base, "RafieiEditor")
+                if (!dir.exists() && !dir.mkdirs()) return null
+                val dst = File(dir, displayName)
+                file.copyTo(dst, true)
+                MediaScannerConnection.scanFile(c, arrayOf(dst.absolutePath), arrayOf(mime), null)
+                Uri.fromFile(dst)
+            } catch (e: Exception) {
+                println("RafieiEditor legacy gallery save failed: " + e.javaClass.simpleName + ": " + e.message)
+                null
+            }
+        }
+        var uri: Uri? = null
+        try {
             val values = ContentValues()
             values.put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
             values.put(MediaStore.MediaColumns.MIME_TYPE, mime)
@@ -310,8 +363,9 @@ object MediaUtil {
             values.put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
             values.put(MediaStore.MediaColumns.IS_PENDING, 1)
             val collection = if (video) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-            val uri = c.contentResolver.insert(collection, values) ?: return null
-            c.contentResolver.openOutputStream(uri)?.use { out ->
+            uri = c.contentResolver.insert(collection, values) ?: return null
+            val os = c.contentResolver.openOutputStream(uri) ?: throw java.io.IOException("no output stream")
+            os.use { out ->
                 file.inputStream().use { input ->
                     val buf = ByteArray(256 * 1024)
                     while (true) {
@@ -324,9 +378,12 @@ object MediaUtil {
             val v2 = ContentValues()
             v2.put(MediaStore.MediaColumns.IS_PENDING, 0)
             c.contentResolver.update(uri, v2, null, null)
-            uri
+            return uri
         } catch (e: Exception) {
-            null
+            // do not leave a half-written IS_PENDING row behind in the gallery
+            if (uri != null) { try { c.contentResolver.delete(uri, null, null) } catch (e2: Throwable) { } }
+            println("RafieiEditor gallery save failed: " + e.javaClass.simpleName + ": " + e.message)
+            return null
         }
     }
 
@@ -351,6 +408,9 @@ object ThumbCache {
     }
     private val exec = Executors.newSingleThreadExecutor()
     private val pending = HashSet<String>()
+    /** Undecodable media is remembered so the timeline does not re-spawn a decoder for
+     *  every paint pass; the set is bounded and cleared when it grows. */
+    private val failed = HashSet<String>()
 
     fun peek(key: String): Bitmap? = synchronized(cache) { cache.get(key) }
 
@@ -364,6 +424,7 @@ object ThumbCache {
         val key = "$path@$bucket@$heightPx"
         val hit = peek(key)
         if (hit != null) return hit
+        synchronized(pending) { if (failed.contains(path)) return null }
         synchronized(pending) {
             if (pending.contains(key)) return null
             pending.add(key)
@@ -377,8 +438,11 @@ object ThumbCache {
                     if (b !== raw) raw.recycle()
                     put(key, b)
                     Bg.ui { onReady() }
+                } else {
+                    synchronized(pending) { if (failed.size > 256) failed.clear(); failed.add(path) }
                 }
             } catch (e: Throwable) {
+                synchronized(pending) { if (failed.size > 256) failed.clear(); failed.add(path) }
             } finally {
                 synchronized(pending) { pending.remove(key) }
             }
@@ -447,16 +511,17 @@ object Waveform {
             if (track < 0 || fmt == null) return null
             ex.selectTrack(track)
             val mime = fmt.getString(MediaFormat.KEY_MIME) ?: return null
-            val sampleRate = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
-            val channels = if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            var sampleRate = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            var channels = if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+            var window = Math.max(1, sampleRate / 20)
+            var floatPcm = fmt.containsKey(MediaFormat.KEY_PCM_ENCODING) && fmt.getInteger(MediaFormat.KEY_PCM_ENCODING) == android.media.AudioFormat.ENCODING_PCM_FLOAT
             val codecInst = MediaCodec.createDecoderByType(mime)
             codec = codecInst
             codecInst.configure(fmt, null, null, 0)
             codecInst.start()
             val info = MediaCodec.BufferInfo()
-            val window = Math.max(1, sampleRate / 20)
             val peaks = ArrayList<Float>()
-            var curMax = 0
+            var curMax = 0f
             var cnt = 0
             var inDone = false
             var outDone = false
@@ -478,24 +543,40 @@ object Waveform {
                     }
                 }
                 val oi = codecInst.dequeueOutputBuffer(info, 5000)
-                if (oi >= 0) {
+                if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    // some decoders change rate / channels / encoding mid-stream
+                    val nf = codecInst.outputFormat
+                    if (nf.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                        sampleRate = nf.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        window = Math.max(1, sampleRate / 20)
+                    }
+                    if (nf.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) channels = Math.max(1, nf.getInteger(MediaFormat.KEY_CHANNEL_COUNT))
+                    if (nf.containsKey(MediaFormat.KEY_PCM_ENCODING)) floatPcm = nf.getInteger(MediaFormat.KEY_PCM_ENCODING) == android.media.AudioFormat.ENCODING_PCM_FLOAT
+                } else if (oi >= 0) {
                     val ob = codecInst.getOutputBuffer(oi)
                     if (ob != null && info.size > 0) {
                         ob.position(info.offset)
                         ob.limit(info.offset + info.size)
-                        val sb = ob.order(ByteOrder.nativeOrder()).asShortBuffer()
-                        while (sb.remaining() >= channels) {
-                            var m = 0
-                            for (ch in 0 until channels) {
-                                val v = Math.abs(sb.get().toInt())
-                                if (v > m) m = v
+                        if (floatPcm) {
+                            val fb = ob.order(ByteOrder.nativeOrder()).asFloatBuffer()
+                            while (fb.remaining() >= channels) {
+                                var m = 0f
+                                for (ch in 0 until channels) { val v = Math.abs(fb.get()); if (v > m) m = v }
+                                if (m > curMax) curMax = m
+                                cnt++
+                                if (cnt >= window) { peaks.add(Math.min(1f, curMax)); curMax = 0f; cnt = 0 }
                             }
-                            if (m > curMax) curMax = m
-                            cnt++
-                            if (cnt >= window) {
-                                peaks.add(curMax / 32768f)
-                                curMax = 0
-                                cnt = 0
+                        } else {
+                            val sb = ob.order(ByteOrder.nativeOrder()).asShortBuffer()
+                            while (sb.remaining() >= channels) {
+                                var m = 0f
+                                for (ch in 0 until channels) {
+                                    val v = Math.abs(sb.get().toInt()).toFloat()
+                                    if (v > m) m = v
+                                }
+                                if (m > curMax) curMax = m
+                                cnt++
+                                if (cnt >= window) { peaks.add(curMax / 32768f); curMax = 0f; cnt = 0 }
                             }
                         }
                     }

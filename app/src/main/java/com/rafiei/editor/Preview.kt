@@ -98,6 +98,8 @@ class TopView(ctx: Context) : View(ctx) {
     private var moved = false
     private var begun = false
     private var downTime = 0L
+    /** true when ACTION_DOWN itself changed the selection (so the next quick tap, not this one, opens the editor). */
+    private var freshSelect = false
 
     init {
         boxPaint.style = Paint.Style.STROKE
@@ -229,8 +231,9 @@ class TopView(ctx: Context) : View(ctx) {
                 if (found != null) {
                     if (selectedId != found.id) {
                         selectedId = found.id
+                        freshSelect = true
                         listener?.onOverlaySelected(found.id)
-                    }
+                    } else freshSelect = false
                     mode = 1
                     parent.requestDisallowInterceptTouchEvent(true)
                     invalidate()
@@ -254,6 +257,15 @@ class TopView(ctx: Context) : View(ctx) {
                     startAngle = Math.toDegrees(Math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
                     startScale = s.scale
                     startRot = s.rot
+                }
+                return true
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                // one finger of the pinch lifted: keep dragging with the remaining finger
+                if (mode == 3 && e.pointerCount <= 2) {
+                    mode = 1
+                    val keep = if (e.actionIndex == 0) 1 else 0
+                    if (keep < e.pointerCount) { lastX = e.getX(keep); lastY = e.getY(keep) }
                 }
                 return true
             }
@@ -303,11 +315,9 @@ class TopView(ctx: Context) : View(ctx) {
                 mode = 0
                 moved = false
                 if (wasMoved && m != 0) listener?.onOverlayCommit()
-                else if (m == 1 && System.currentTimeMillis() - downTime < 300) {
+                else if (m == 1 && !freshSelect && System.currentTimeMillis() - downTime < 300) {
                     val s = sel()
-                    if (s != null && s.kind == "text") {
-                        // second tap on an already selected text opens the editor
-                    }
+                    if (s != null && s.kind == "text") listener?.onOverlayEdit(s.id) // second tap on selected text opens the editor
                 }
                 return true
             }
@@ -369,6 +379,8 @@ class PreviewEngine(val ctx: Context, val stage: PreviewStage, val projectProvid
     private val audioKeys = HashMap<String, String>()
     private var lastUiNotify = 0L
     private var colorSig = ""
+    /** "Hold to compare" (photo mode): show the raw image without zoom/pan/rotate/filters. */
+    @Volatile var compareOriginal = false
 
     private fun tv(slot: Int): TextureView = if (slot == 0) stage.tvA else stage.tvB
 
@@ -637,7 +649,9 @@ class PreviewEngine(val ctx: Context, val stage: PreviewStage, val projectProvid
             if (Math.abs(pl.playbackParameters.speed - c.speed) > 0.001f) pl.playbackParameters = PlaybackParameters(c.speed)
             pl.volume = if (pr.muteClips) 0f else clampF(c.volume, 0f, 1f)
             if (forceSeek || Math.abs(pl.currentPosition - want) > 350) {
-                pl.setSeekParameters(if (playingNow) SeekParameters.EXACT else SeekParameters.CLOSEST_SYNC)
+                // EXACT in both states: a paused seek must land on the frame the user asked for,
+                // not on a nearby keyframe (minSdk 29 decoders handle exact seeks fine).
+                pl.setSeekParameters(SeekParameters.EXACT)
                 pl.seekTo(clampL(want, 0L, Math.max(0L, c.trimEnd - c.trimStart - 1)))
             }
             pl.playWhenReady = playingNow
@@ -681,6 +695,19 @@ class PreviewEngine(val ctx: Context, val stage: PreviewStage, val projectProvid
     private fun applyVisual(pr: Project, i: Int, lt: Long, t: Long, c: Clip) {
         val d = Fx.dyn(pr, i, lt, t)
         val xf = Fx.xform(c, d)
+        if (compareOriginal) {
+            // raw image: no motion, no zoom/pan, no colour
+            stage.zoomLayer.scaleX = 1f; stage.zoomLayer.scaleY = 1f
+            stage.zoomLayer.translationX = 0f; stage.zoomLayer.translationY = 0f
+            stage.zoomLayer.rotation = 0f
+            if (colorSig != "ORIG") {
+                colorSig = "ORIG"
+                stage.img.colorFilter = null
+                tv(0).setLayerType(View.LAYER_TYPE_NONE, null)
+                tv(1).setLayerType(View.LAYER_TYPE_NONE, null)
+            }
+            return
+        }
         val fw = stage.frame.layoutParams.width.toFloat()
         val fh = stage.frame.layoutParams.height.toFloat()
         stage.zoomLayer.scaleX = xf[0] * xf[4]

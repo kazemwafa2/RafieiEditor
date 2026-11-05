@@ -401,6 +401,8 @@ object Render {
         val alpha = clampF(o.opacity * a.alpha, 0f, 1f)
         if (alpha <= 0.003f) return
         if (o.kind == "comp") { Comp.draw(c, o, W, H, tMs, alpha); return }
+        if (o.kind == "text" && o.tfx == "ring") { drawRingText(c, o, W, H, tMs, alpha); return }
+        if (o.kind == "eq" && Eq.tplOf(o).behind) { drawEqBehind(c, o, W, H, tMs, alpha); return }
         c.save()
         c.translate((o.cx + a.dx) * W, (o.cy + a.dy) * H)
         c.rotate(o.rot + a.rot)
@@ -415,14 +417,83 @@ object Render {
         c.restore()
     }
 
+    /** Scene design drawn over the whole clip but cut out where the person is, so the user's film stays in front. */
+    /** Background removal: everything except the person is covered by a colour, gradient or picture. */
+    private fun drawCut(c: Canvas, vr: FloatArray, clip: Clip, relMs: Long, W: Float, H: Float) {
+        val j = try { org.json.JSONObject(clip.cut) } catch (e: Exception) { return }
+        val lk = Seg.lookAt(clip, relMs, segSync())
+        val mask = lk?.fill ?: return
+        val dst = RectF(vr[0], vr[1], vr[0] + vr[2], vr[1] + vr[3])
+        val sc = c.saveLayer(dst, null)
+        c.clipRect(dst)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val mode = j.optString("m", "color")
+        val c1 = j.optInt("c1", 0xFF00B140.toInt())
+        val c2 = j.optInt("c2", 0xFF0A1030.toInt())
+        var drew = false
+        if (mode == "image") {
+            val b = BmpCache.get(j.optString("uri", ""), 1280)
+            if (b != null) {
+                val s = Math.max(dst.width() / b.width, dst.height() / b.height)
+                val w = b.width * s; val h = b.height * s
+                c.drawBitmap(b, null, RectF(dst.centerX() - w / 2f, dst.centerY() - h / 2f, dst.centerX() + w / 2f, dst.centerY() + h / 2f), p)
+                drew = true
+            }
+        }
+        if (!drew) {
+            if (mode == "grad") p.shader = android.graphics.LinearGradient(dst.left, dst.top, dst.left, dst.bottom, c1, c2, android.graphics.Shader.TileMode.CLAMP)
+            else p.color = c1
+            c.drawRect(dst, p)
+            p.shader = null
+        }
+        val m = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        m.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+        c.drawBitmap(mask, null, dst, m)
+        c.restoreToCount(sc)
+    }
+
+    private fun drawEqBehind(c: Canvas, o: Overlay, W: Float, H: Float, tMs: Long, alpha: Float) {
+        val rect = curRect.get() ?: return
+        val lk = curClip.get()?.let { Seg.lookAt(it.first, it.second, segSync()) }
+        val mask = lk?.fill ?: return
+        val s = Math.max(W / EQ_W, H / EQ_H)
+        val full = RectF(0f, 0f, W, H)
+        val dst = RectF(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3])
+        val sc = c.saveLayer(full, null)
+        c.save()
+        c.translate(W / 2f, H / 2f)
+        Eq.draw(c, o, EQ_W * s, tMs, alpha)
+        c.restore()
+        val m = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        m.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+        c.drawBitmap(mask, null, dst, m)
+        c.restoreToCount(sc)
+    }
+
     private fun drawText(c: Canvas, o: Overlay, W: Float, a: AnimState, alpha: Float, tMs: Long = 0L) {
         var txt = o.text
+        val ws = if (o.glyph == "sub" && o.words.isNotEmpty() && o.smode != "line") SubWords.parse(o.words) else emptyList()
+        var curW = -1
+        var wordAge = 0L
+        if (ws.isNotEmpty()) {
+            val rel = tMs - o.startMs
+            curW = SubWords.current(ws, rel)
+            if (curW >= 0) wordAge = rel - ws[curW].s
+            if (o.smode == "word") {
+                if (curW < 0) return
+                txt = ws[curW].w
+                // pop-in of every new word
+                val k = clampF(wordAge / 140f, 0f, 1f)
+                val sc = 0.7f + 0.3f * k + 0.12f * Math.sin(k * Math.PI).toFloat()
+                c.scale(sc, sc)
+            }
+        }
         if (a.reveal < 0.999f) {
             val n = Math.round(txt.length * clampF(a.reveal, 0f, 1f))
             txt = txt.substring(0, clampI(n, 0, txt.length))
         }
         val e = textEntry(o, W, txt) ?: return
-        val full = textEntry(o, W, if (o.text.isEmpty()) " " else o.text) ?: e
+        val full = if (o.smode == "word" && ws.isNotEmpty()) e else (textEntry(o, W, if (o.text.isEmpty()) " " else o.text) ?: e)
         val pad = o.size * W * 0.25f
         val bw = full.w + pad * 2f
         val bh = full.h + pad * 1.2f
@@ -493,12 +564,51 @@ object Render {
             e.fillPaint.clearShadowLayer()
             return
         }
+        val tt = (tMs - o.startMs) / 1000f
+        if (fx == "glitch") {
+            val tick = (tt * 14f).toInt()
+            val j = (((tick * 7919) % 7) - 3) * px * 0.012f
+            c.save(); c.translate(j + px * 0.03f, 0f)
+            e.fillPaint.color = withAlpha(0xFF00E5FF.toInt(), alpha * 0.8f); e.fill.draw(c); c.restore()
+            c.save(); c.translate(-j - px * 0.03f, 0f)
+            e.fillPaint.color = withAlpha(0xFFFF2D95.toInt(), alpha * 0.8f); e.fill.draw(c); c.restore()
+        }
         if (o.outlineW > 0.01f) {
             e.strokePaint.color = withAlpha(o.outlineColor, alpha)
             e.stroke.draw(c)
         }
-        e.fillPaint.color = withAlpha(o.color, alpha)
-        e.fill.draw(c)
+        if (fx == "rainbow") {
+            val cols = intArrayOf(0xFFFF3B3B.toInt(), 0xFFFFD93D.toInt(), 0xFF3BFF7A.toInt(), 0xFF3BC8FF.toInt(), 0xFFB45BFF.toInt(), 0xFFFF3B3B.toInt())
+            val sh = LinearGradient(0f, 0f, Math.max(10f, e.w), 0f, cols, null, Shader.TileMode.REPEAT)
+            val m = android.graphics.Matrix(); m.setTranslate(tt * e.w * 0.6f, 0f); sh.setLocalMatrix(m)
+            e.fillPaint.shader = sh
+            e.fillPaint.color = withAlpha(Color.WHITE, alpha)
+            e.fill.draw(c)
+            e.fillPaint.shader = null
+        } else {
+            e.fillPaint.color = withAlpha(o.color, alpha)
+            e.fill.draw(c)
+        }
+        if (fx == "sweep") {
+            val x0 = ((tt * 0.7f) % 1.6f - 0.3f) * e.w
+            val sh = LinearGradient(x0, 0f, x0 + e.w * 0.25f, e.h * 0.2f, intArrayOf(0x00FFFFFF, 0xFFFFFFFF.toInt(), 0x00FFFFFF), null, Shader.TileMode.CLAMP)
+            e.fillPaint.shader = sh
+            e.fillPaint.color = withAlpha(Color.WHITE, alpha)
+            e.fill.draw(c)
+            e.fillPaint.shader = null
+        }
+        if (ws.isNotEmpty() && curW >= 0 && (o.smode == "kar" || o.smode == "hl") && SubWords.join(ws) == txt) {
+            var st = 0
+            for (i in 0 until curW) st += ws[i].w.length + 1
+            val en = st + ws[curW].w.length
+            val path = Path()
+            e.fill.getSelectionPath(if (o.smode == "kar") 0 else st, en, path)
+            c.save()
+            c.clipPath(path)
+            e.fillPaint.color = withAlpha(o.hiColor, alpha)
+            e.fill.draw(c)
+            c.restore()
+        }
         e.fillPaint.clearShadowLayer()
     }
 
@@ -596,7 +706,14 @@ object Render {
         }
     }
 
-    private val curClip = ThreadLocal<Pair<Clip, Long>?>()
+    private val curClip = object : ThreadLocal<Pair<Clip, Long>?>() {
+        override fun initialValue(): Pair<Clip, Long>? = null
+    }
+
+    /** True while the final render (video export overlay pass or photo render) draws on this thread.
+     *  On that path a missing person mask is recomputed synchronously instead of silently skipping the design. */
+    val exportRender = ThreadLocal<Boolean>()
+    private fun segSync(): Boolean = exportRender.get() == true
 
     /** Everything that is drawn above the video: clip vignette/grain, overlay effects, text and stickers. */
     fun drawTop(c: Canvas, W: Int, H: Int, p: Project, tMs: Long) {
@@ -613,6 +730,8 @@ object Render {
             val bb = Math.min(Hf, r[1] + r[3])
             vr = floatArrayOf(l, t, rr - l, bb - t)
             curClip.set(Pair(clip, ct[1]))
+            curRect.set(vr)
+            if (clip.cut.isNotEmpty()) drawCut(c, vr, clip, ct[1], Wf, Hf)
             val mk = ClipMask.of(clip)
             if (mk != null) drawMask(c, vr, mk, ct[1])
             val lt = ClipLight.of(clip)
@@ -623,7 +742,7 @@ object Render {
             val gr = Fx.grainOf(clip)
             if (gr > 0.01f) drawGrain(c, vr, gr, tMs)
         }
-        if (ct[0] < 0) curClip.set(null)
+        if (ct[0] < 0) { curClip.set(null); curRect.set(null) }
         for (f in p.fxs) {
             if (tMs >= f.startMs && tMs < f.endMs()) {
                 val d = Fx.fxDef(f.fx)
@@ -640,7 +759,7 @@ object Render {
         for (f in p.fxs) if (tMs >= f.startMs && tMs < f.endMs()) return true
         for (o in p.overlays) {
             if (tMs >= o.startMs && tMs < o.endMs()) {
-                if (o.kind == "eq" || o.kind == "comp" || (o.kind == "image" && o.nf > 0) || (o.kind == "text" && (o.tfx == "echo" || o.tfx == "echoh"))) return true
+                if (o.kind == "eq" || o.kind == "comp" || (o.kind == "image" && o.nf > 0) || (o.kind == "text" && (o.tfx == "echo" || o.tfx == "echoh" || o.tfx == "ring" || o.tfx == "glitch" || o.tfx == "rainbow" || o.tfx == "sweep" || (o.words.isNotEmpty() && o.smode != "line")))) return true
                 if (o.animIn != "none" && tMs - o.startMs < o.animInMs) return true
                 if (o.animOut != "none" && o.endMs() - tMs < o.animOutMs) return true
             }
@@ -653,6 +772,7 @@ object Render {
             if (lt != null && lt.anim != "none") return true
             val mk = ClipMask.of(p.clips[ct[0].toInt()])
             if (mk != null && mk.anim != "none") return true
+            if (p.clips[ct[0].toInt()].cut.isNotEmpty()) return true
         }
         return false
     }
@@ -792,6 +912,10 @@ object Render {
                     p.clearShadowLayer()
                 }
             }
+            "p_flame", "p_bluefire", "p_colorflame", "p_blaze" -> {
+                flames(c, p, f.fx, lk, x0, y0, w, h, t, W, a, f.cfg.toIntOrNull())
+            }
+            "p_spiral" -> neonSpiral(c, p, lk, x0, y0, w, h, t, W, a, f.cfg.toIntOrNull() ?: 0xFF18E6FF.toInt())
             "p_butterfly" -> {
                 val b = lk.box
                 val cx = (b[0] + b[2]) / 2f
@@ -799,6 +923,325 @@ object Render {
                 drawButterflies(c, p, x0, y0, w, h, t, a, W, cx, cy, Math.max(0.12f, (b[2] - b[0]) * 0.75f), Math.max(0.12f, (b[3] - b[1]) * 0.5f))
             }
         }
+    }
+
+    private val curRect = object : ThreadLocal<FloatArray?>() {
+        override fun initialValue(): FloatArray? = null
+    }
+
+    private fun hsv(h: Float, s: Float, v: Float): Int = Color.HSVToColor(floatArrayOf(((h % 360f) + 360f) % 360f, clampF(s, 0f, 1f), clampF(v, 0f, 1f)))
+
+    private fun flameColor(kind: String, u: Float, i: Int, t: Float, custom: Int?): Int {
+        if (custom != null) {
+            val k = (1f - u) * 0.6f
+            return Color.rgb((Color.red(custom) + (255 - Color.red(custom)) * k).toInt(), (Color.green(custom) + (255 - Color.green(custom)) * k).toInt(), (Color.blue(custom) + (255 - Color.blue(custom)) * k).toInt())
+        }
+        return when (kind) {
+            "p_bluefire" -> hsv(190f + 50f * u, 0.25f + 0.75f * u, 1f)
+            "p_colorflame" -> hsv(t * 90f + i * 7f + u * 80f, 0.85f, 1f)
+            "p_blaze" -> hsv(48f - 40f * u, 0.4f + 0.6f * u, 1f)
+            else -> hsv(58f - 58f * u, 0.45f + 0.55f * u, 1f)
+        }
+    }
+
+    /** Fire / blue fire / rainbow fire licking up from the edge of the person; "blaze" bursts outward. */
+    private fun flames(c: Canvas, p: Paint, kind: String, lk: Seg.Look, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float, custom: Int?) {
+        val m = lk.pts.size / 2
+        if (m == 0) return
+        val n = (70 + 150 * a).toInt()
+        val b = lk.box
+        val bcx = x0 + (b[0] + b[2]) / 2f * w
+        val bcy = y0 + (b[1] + b[3]) / 2f * h
+        p.style = Paint.Style.FILL
+        for (i in 0 until n) {
+            val sp = 0.6f + 0.9f * hashNoise(i * 3 + 1)
+            val u = (t * sp * 0.9f + hashNoise(i * 7 + 2)) % 1f
+            val pi = (hashNoise(i * 5 + 4) * m).toInt().coerceIn(0, m - 1)
+            var px = x0 + lk.pts[pi * 2] * w
+            var py = y0 + lk.pts[pi * 2 + 1] * h
+            if (kind == "p_blaze") {
+                val dx = px - bcx
+                val dy = py - bcy
+                val len = Math.max(1f, Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat())
+                px += dx / len * u * 0.16f * w
+                py += dy / len * u * 0.16f * w
+            } else {
+                px += Math.sin((t * 3f + i).toDouble()).toFloat() * 0.014f * w * u
+                py -= u * 0.17f * h * (0.5f + hashNoise(i * 11 + 5))
+            }
+            val r = Math.max(1f, W * 0.022f * (1f - u * 0.8f) * (0.6f + hashNoise(i * 13 + 6)))
+            val col = flameColor(kind, u, i, t, custom)
+            val al = (1f - u) * (0.45f + 0.5f * a)
+            p.shader = RadialGradient(px, py, r, intArrayOf(withAlpha(col, al), withAlpha(col, 0f)), null, Shader.TileMode.CLAMP)
+            c.drawCircle(px, py, r, p)
+        }
+        p.shader = null
+    }
+
+    private fun neonSpiral(c: Canvas, p: Paint, lk: Seg.Look, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float, col: Int) {
+        val fill = lk.fill ?: return
+        val b = lk.box
+        val bx = x0 + b[0] * w
+        val by = y0 + b[1] * h
+        val bw = (b[2] - b[0]) * w
+        val bh = (b[3] - b[1]) * h
+        val dst = RectF(x0, y0, x0 + w, y0 + h)
+        val sc = c.saveLayer(dst, null)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = Math.max(2f, W * 0.009f)
+        p.strokeCap = Paint.Cap.ROUND
+        val bands = 8
+        val steps = 28
+        for (k in 0 until bands) {
+            val yb = by + bh * (((k + t * 0.5f) % bands) / bands)
+            var lx = bx
+            var ly = yb
+            for (s in 1..steps) {
+                val x = bx + bw * s / steps
+                val ph = s.toFloat() / steps * 6.2832f * 1.1f + t * 3f
+                val y = yb + Math.sin(ph.toDouble()).toFloat() * bh * 0.03f
+                val front = Math.cos(ph.toDouble()).toFloat() > 0f
+                p.color = withAlpha(col, if (front) 1f else 0.3f)
+                p.setShadowLayer(W * 0.02f, 0f, 0f, col)
+                c.drawLine(lx, ly, x, y, p)
+                lx = x; ly = y
+            }
+        }
+        p.clearShadowLayer()
+        val m = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        m.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+        c.drawBitmap(fill, null, dst, m)
+        c.restoreToCount(sc)
+        p.style = Paint.Style.FILL
+        if (lk.glow != null) {
+            val bp = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            bp.colorFilter = android.graphics.PorterDuffColorFilter(col, PorterDuff.Mode.SRC_IN)
+            bp.alpha = (255 * clampF(0.3f + a * 0.5f, 0f, 1f)).toInt()
+            c.drawBitmap(lk.glow, null, dst, bp)
+        }
+    }
+
+    /** Text wrapped around the person like a ring: the far half passes behind the body, the near half in front. */
+    private fun drawRingText(c: Canvas, o: Overlay, W: Float, H: Float, tMs: Long, alpha: Float) {
+        val txt0 = o.text.trim()
+        if (txt0.isEmpty()) return
+        val txt = txt0.uppercase()
+        val px = Math.max(8f, o.size * W)
+        val tp = Paint(Paint.ANTI_ALIAS_FLAG)
+        tp.typeface = Fonts.get(o.font, true, o.italic)
+        tp.textSize = px
+        val adv = FloatArray(txt.length) { Math.max(px * 0.2f, tp.measureText(txt.substring(it, it + 1))) }
+        val tw = adv.sum() + px * 0.8f // text + gap
+        val R = W * 0.30f * o.scale
+        val ry = R * 0.26f
+        val circ = 6.2832f * R
+        val k = Math.max(1, Math.floor((circ / tw).toDouble()).toInt())
+        val unit = circ / k / tw
+        val t = (tMs - o.startMs) / 1000f
+        val phase = t * 0.9f
+        val cx = o.cx * W
+        val cy = o.cy * H
+        val lk = curClip.get()?.let { Seg.lookAt(it.first, it.second, segSync()) }
+        val rect = curRect.get() ?: floatArrayOf(0f, 0f, W, H)
+        val sp = Paint(Paint.ANTI_ALIAS_FLAG)
+        sp.typeface = tp.typeface; sp.textSize = px
+        sp.style = Paint.Style.STROKE
+        sp.strokeJoin = Paint.Join.ROUND
+        sp.strokeWidth = Math.max(2f, px * 0.12f)
+        sp.color = withAlpha(if (o.outlineW > 0.01f) o.outlineColor else 0xFF808080.toInt(), alpha)
+        fun glyphs(front: Boolean) {
+            var pos = 0f
+            for (rep in 0 until k) {
+                pos = rep * tw * unit
+                for (ci in txt.indices) {
+                    val ang = (pos + adv[ci] * unit / 2f) / R + phase
+                    pos += adv[ci] * unit
+                    val z = Math.cos(ang.toDouble()).toFloat()
+                    if ((z > 0f) != front) continue
+                    val sx = z
+                    if (Math.abs(sx) < 0.07f) continue
+                    val x = cx + R * Math.sin(ang.toDouble()).toFloat()
+                    val y = cy + ry * z
+                    val dep = 0.8f + 0.2f * z
+                    c.save()
+                    c.translate(x, y)
+                    c.rotate(clampF(Math.toDegrees(Math.atan2((-ry * Math.sin(ang.toDouble())), (R * Math.max(0.3f, Math.abs(z))).toDouble())).toFloat(), -25f, 25f))
+                    c.scale(sx * dep, dep)
+                    val ch = txt.substring(ci, ci + 1)
+                    val yy = -(tp.ascent() + tp.descent()) / 2f
+                    c.drawText(ch, -adv[ci] / 2f, yy, sp)
+                    tp.color = withAlpha(o.color, alpha * (if (front) 1f else 0.8f))
+                    c.drawText(ch, -adv[ci] / 2f, yy, tp)
+                    c.restore()
+                }
+            }
+        }
+        if (lk?.fill != null) {
+            val bounds = RectF(cx - R - px * 2, cy - ry - px * 2, cx + R + px * 2, cy + ry + px * 2)
+            val sc = c.saveLayer(bounds, null)
+            glyphs(false)
+            val m = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            m.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+            c.drawBitmap(lk.fill, null, RectF(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]), m)
+            c.restoreToCount(sc)
+        } else glyphs(false)
+        glyphs(true)
+    }
+
+    private fun drawClubLights(c: Canvas, p: Paint, x0: Float, y0: Float, w: Float, h: Float, t: Float, a: Float) {
+        val n = 6
+        p.style = Paint.Style.FILL
+        for (i in 0 until n) {
+            val ang = Math.sin((t * (0.7f + 0.23f * i) + i * 1.3f).toDouble()).toFloat() * 0.55f
+            val ox = x0 + w * (i + 0.5f) / n
+            val len = h * 1.1f
+            val spread = 0.075f
+            val ax = ox + Math.sin((ang - spread).toDouble()).toFloat() * len
+            val ay = y0 + Math.cos((ang - spread).toDouble()).toFloat() * len
+            val bx = ox + Math.sin((ang + spread).toDouble()).toFloat() * len
+            val by = y0 + Math.cos((ang + spread).toDouble()).toFloat() * len
+            val col = hsv(i * 60f + t * 50f, 0.8f, 1f)
+            val path = Path()
+            path.moveTo(ox, y0); path.lineTo(ax, ay); path.lineTo(bx, by); path.close()
+            p.shader = LinearGradient(ox, y0, (ax + bx) / 2f, (ay + by) / 2f, withAlpha(col, 0.6f * a), withAlpha(col, 0f), Shader.TileMode.CLAMP)
+            c.drawPath(path, p)
+        }
+        p.shader = null
+        val beat = Math.pow(Math.max(0.0, Math.sin(t * 8.0)), 8.0).toFloat()
+        if (beat > 0.02f) {
+            p.color = withAlpha(Color.WHITE, 0.22f * a * beat)
+            c.drawRect(x0, y0, x0 + w, y0 + h, p)
+        }
+    }
+
+    private fun drawFireplace(c: Canvas, p: Paint, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float) {
+        p.style = Paint.Style.FILL
+        p.shader = LinearGradient(0f, y0 + h, 0f, y0 + h * 0.6f, withAlpha(0xFFFF6A00.toInt(), 0.5f * a), withAlpha(0xFFFF6A00.toInt(), 0f), Shader.TileMode.CLAMP)
+        c.drawRect(x0, y0 + h * 0.6f, x0 + w, y0 + h, p)
+        val n = (60 + 100 * a).toInt()
+        for (i in 0 until n) {
+            val sp = 0.5f + hashNoise(i * 3 + 1)
+            val u = (t * sp * 0.8f + hashNoise(i * 7 + 2)) % 1f
+            val x = x0 + w * hashNoise(i * 5 + 4) + Math.sin((t * 3f + i).toDouble()).toFloat() * 0.02f * w * u
+            val y = y0 + h * (1.02f - u * (0.18f + 0.3f * hashNoise(i * 9 + 8)))
+            val r = Math.max(2f, W * 0.04f * (1f - u * 0.85f) * (0.6f + hashNoise(i * 13 + 6)))
+            val col = flameColor("p_flame", u, i, t, null)
+            p.shader = RadialGradient(x, y, r, intArrayOf(withAlpha(col, (1f - u) * 0.8f * a), withAlpha(col, 0f)), null, Shader.TileMode.CLAMP)
+            c.drawCircle(x, y, r, p)
+        }
+        p.shader = null
+    }
+
+    private fun drawCrossFlash(c: Canvas, p: Paint, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float) {
+        val period = 0.55f
+        val k = (t / period).toInt()
+        val ph = (t % period) / period
+        val pulse = Math.max(0f, 1f - ph * 3f)
+        if (pulse <= 0.01f) return
+        val fx = x0 + w * (0.2f + 0.6f * hashNoise(k * 7 + 1))
+        val fy = y0 + h * (0.15f + 0.6f * hashNoise(k * 11 + 3))
+        p.style = Paint.Style.FILL
+        p.color = withAlpha(Color.WHITE, 0.30f * a * pulse)
+        c.drawRect(x0, y0, x0 + w, y0 + h, p)
+        val rad = W * 0.32f * pulse * (0.5f + 0.5f * a)
+        p.shader = RadialGradient(fx, fy, rad * 0.6f, intArrayOf(withAlpha(Color.WHITE, 0.9f * pulse), withAlpha(Color.WHITE, 0f)), null, Shader.TileMode.CLAMP)
+        c.drawCircle(fx, fy, rad * 0.6f, p)
+        p.shader = null
+        p.color = withAlpha(Color.WHITE, 0.95f * pulse)
+        p.setShadowLayer(rad * 0.2f, 0f, 0f, Color.WHITE)
+        star4(c, fx, fy, rad, p)
+        p.clearShadowLayer()
+    }
+
+    private fun drawSyncHud(c: Canvas, p: Paint, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float, durS: Float) {
+        val cx = x0 + w / 2f
+        val cone = Path()
+        cone.moveTo(cx - w * 0.06f, y0); cone.lineTo(cx + w * 0.06f, y0)
+        cone.lineTo(cx + w * 0.40f, y0 + h * 0.80f); cone.lineTo(cx - w * 0.40f, y0 + h * 0.80f); cone.close()
+        p.style = Paint.Style.FILL
+        p.shader = LinearGradient(0f, y0, 0f, y0 + h * 0.8f, withAlpha(0xFFBFD8FF.toInt(), 0.40f * a), withAlpha(0xFFBFD8FF.toInt(), 0f), Shader.TileMode.CLAMP)
+        c.drawPath(cone, p)
+        p.shader = null
+        val pct = clampF(t / Math.max(0.5f, durS), 0f, 1f)
+        val tp = Paint(Paint.ANTI_ALIAS_FLAG)
+        tp.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        tp.textSize = W * 0.036f
+        tp.letterSpacing = 0.35f
+        tp.color = withAlpha(Color.WHITE, 0.9f * Math.min(1f, a + 0.3f))
+        tp.textAlign = Paint.Align.CENTER
+        c.drawText("SYNC " + Math.round(pct * 100f) + "%", cx, y0 + h * 0.13f, tp)
+        val bw = w * 0.42f
+        val by = y0 + h * 0.15f
+        p.color = withAlpha(Color.WHITE, 0.22f)
+        c.drawRect(cx - bw / 2f, by, cx + bw / 2f, by + W * 0.004f, p)
+        p.color = withAlpha(Color.WHITE, 0.95f)
+        c.drawRect(cx - bw / 2f, by, cx - bw / 2f + bw * pct, by + W * 0.004f, p)
+    }
+
+    private fun drawGlowGrid(c: Canvas, p: Paint, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float) {
+        p.style = Paint.Style.FILL
+        val rows = 9
+        val cols = 13
+        for (r in 0 until rows) {
+            val z = ((r + (t * 0.35f) % 1f) / rows)
+            val zz = Math.pow(z.toDouble(), 1.5).toFloat()
+            val y = y0 + h * (0.52f + 0.46f * zz)
+            for (cI in 0 until cols) {
+                val x = x0 + w * 0.5f + (cI - (cols - 1) / 2f) * w * 0.115f * (0.25f + zz * 1.3f)
+                if (x < x0 - 20f || x > x0 + w + 20f) continue
+                val rad = Math.max(1.5f, W * 0.013f * (0.25f + zz * 1.4f))
+                val tw = 0.55f + 0.45f * Math.sin((t * 2f + r * 1.7f + cI * 2.3f).toDouble()).toFloat()
+                p.shader = RadialGradient(x, y, rad * 2.2f, intArrayOf(withAlpha(Color.WHITE, (0.35f + 0.65f * zz) * tw * a), withAlpha(0xFFBFD8FF.toInt(), 0f)), null, Shader.TileMode.CLAMP)
+                c.drawCircle(x, y, rad * 2.2f, p)
+            }
+        }
+        p.shader = null
+    }
+
+    private fun drawNeonRing(c: Canvas, p: Paint, x0: Float, y0: Float, w: Float, h: Float, t: Float, W: Float, a: Float) {
+        val cx = x0 + w / 2f
+        val cy = y0 + h / 2f
+        val R = Math.min(w, h) * 0.13f * (1f + 0.03f * Math.sin(t * 2.0).toFloat())
+        // flowing light streaks
+        p.style = Paint.Style.STROKE
+        p.strokeCap = Paint.Cap.ROUND
+        val starts = arrayOf(floatArrayOf(0f, 0.30f), floatArrayOf(1f, 0.55f), floatArrayOf(0f, 0.85f), floatArrayOf(1f, 0.15f), floatArrayOf(0.2f, 1f), floatArrayOf(0.8f, 0f))
+        for ((i, s) in starts.withIndex()) {
+            val sx = x0 + s[0] * w
+            val sy = y0 + s[1] * h
+            val path = Path()
+            path.moveTo(sx, sy)
+            path.quadTo(cx + (sx - cx) * 0.3f, sy + (cy - sy) * 0.9f, cx + (sx - cx) * 0.18f, cy + (sy - cy) * 0.18f)
+            val col = if (i % 2 == 0) 0xFF4D7CFF.toInt() else 0xFFE040FB.toInt()
+            p.strokeWidth = Math.max(1.5f, W * 0.004f * (1f + (i % 3)))
+            p.color = withAlpha(col, 0.85f * a)
+            p.pathEffect = android.graphics.DashPathEffect(floatArrayOf(W * 0.25f, W * 0.12f), -t * W * 0.5f + i * 40f)
+            p.setShadowLayer(W * 0.012f, 0f, 0f, col)
+            c.drawPath(path, p)
+        }
+        p.pathEffect = null
+        // the ring
+        val sw = R * 0.14f
+        p.strokeWidth = sw
+        val sh = android.graphics.SweepGradient(cx, cy, intArrayOf(0xFFFF4DD8.toInt(), 0xFF4D7CFF.toInt(), 0xFFB26BFF.toInt(), 0xFFFF4DD8.toInt()), null)
+        val m = android.graphics.Matrix()
+        m.setRotate(t * 40f, cx, cy)
+        sh.setLocalMatrix(m)
+        p.shader = sh
+        p.setShadowLayer(R * 0.5f, 0f, 0f, 0xFFB26BFF.toInt())
+        c.drawCircle(cx, cy, R, p)
+        p.strokeWidth = sw * 0.4f
+        c.drawCircle(cx, cy, R * 1.12f, p)
+        p.shader = null
+        p.clearShadowLayer()
+        // bright dot travelling around the ring
+        val ang = t * 1.6f
+        val dx = cx + Math.cos(ang.toDouble()).toFloat() * R * 1.06f
+        val dy = cy + Math.sin(ang.toDouble()).toFloat() * R * 1.06f
+        p.style = Paint.Style.FILL
+        p.shader = RadialGradient(dx, dy, R * 0.45f, intArrayOf(withAlpha(Color.WHITE, 0.95f), withAlpha(0xFF8FA8FF.toInt(), 0f)), null, Shader.TileMode.CLAMP)
+        c.drawCircle(dx, dy, R * 0.45f, p)
+        p.shader = null
     }
 
     private fun drawFx(c: Canvas, f: FxItem, r: FloatArray, tMs: Long, W: Float) {
@@ -847,10 +1290,16 @@ object Render {
                 }
             }
             "butterflies" -> drawButterflies(c, p, x0, y0, w, h, t, a, W, 0.5f, 0.5f, 0.38f, 0.38f)
-            "p_outline", "p_electric", "p_sparkle", "p_butterfly" -> {
+            "clublights" -> drawClubLights(c, p, x0, y0, w, h, t, a)
+            "fireplace" -> drawFireplace(c, p, x0, y0, w, h, t, W, a)
+            "crossflash" -> drawCrossFlash(c, p, x0, y0, w, h, t, W, a)
+            "synchud" -> drawSyncHud(c, p, x0, y0, w, h, t, W, a, f.durMs / 1000f)
+            "glowgrid" -> drawGlowGrid(c, p, x0, y0, w, h, t, W, a)
+            "neonring" -> drawNeonRing(c, p, x0, y0, w, h, t, W, a)
+            "p_outline", "p_electric", "p_sparkle", "p_butterfly", "p_flame", "p_bluefire", "p_colorflame", "p_blaze", "p_spiral" -> {
                 val cc = curClip.get()
                 if (cc != null) {
-                    val lk = Seg.lookAt(cc.first, cc.second)
+                    val lk = Seg.lookAt(cc.first, cc.second, segSync())
                     if (lk != null) personFx(c, f, lk, x0, y0, w, h, t, W, a, p)
                 }
             }
@@ -1045,7 +1494,7 @@ object Render {
         val ct = clipTime(p, tMs)
         if (ct[0] >= 0) {
             val c = p.clips[ct[0].toInt()]
-            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null || ClipMask.of(c) != null) return false
+            if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null || ClipMask.of(c) != null || c.cut.isNotEmpty()) return false
             if (c.motion.isNotEmpty() && Motion.hasOverlayPost(c.motion)) return false
         }
         return true

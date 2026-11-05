@@ -12,6 +12,9 @@ object Eq {
     /** Project used by the current drawing pass (set by Render.drawTop). */
     val cur = ThreadLocal<Project?>()
 
+    /** Small video frame shown on the TV of the room design (set by Render while drawing). */
+    val liveShot = ThreadLocal<android.graphics.Bitmap?>()
+
     val tpls: List<EqTpl> by lazy {
         val l = ArrayList<EqTpl>()
         val lay = eqLayeredTemplates().associateBy { it.id }
@@ -23,6 +26,11 @@ object Eq {
         lay["classic"]?.let { l.add(it) }
         l.addAll(eqVizTemplates())
         l.addAll(eqImageTemplates())
+        l.add(EqHazaragi())
+        l.add(EqTvRoom())
+        l.add(EqGoldWave())
+        l.add(EqNeonRing())
+        l.add(EqRainbowMirror())
         l
     }
 
@@ -63,6 +71,7 @@ object Eq {
         c.put("fx", old.optBoolean("fx", true))
         c.put("bg", old.optString("bg", "none"))
         o.cfg = c.toString()
+        t.defText?.let { o.text = it }
     }
 
     fun newOverlay(id: String, name: String): Overlay {
@@ -79,6 +88,7 @@ object Eq {
         val d = t.def
         val st = EqState()
         st.name = o.text
+        st.cfg = c
         st.letter = c.optString("letter", "K")
         st.heartMode = c.optString("heartMode", "letter")
         if (st.heartMode == "photo" && o.uri.isNotEmpty()) st.photo = BmpCache.get(o.uri, 1024)
@@ -180,7 +190,42 @@ object Eq {
         val lv = FloatArray(NBAND)
         for (j in 0 until NBAND) lv[j] = 0.25f * raw[Math.max(0, j - 1)] + 0.5f * raw[j] + 0.25f * raw[Math.min(NBAND - 1, j + 1)]
         val rel = Math.max(0L, tMs - o.startMs) / 1000f
-        return EqData(rel, Math.max(0.1f, o.durMs / 1000f), lv, bass, now, null)
+        val ed = EqData(rel, Math.max(0.1f, o.durMs / 1000f), lv, bass, now, null)
+        if (tplId == "hazaragi") ed.beats = hzBeats(p, o, tMs, real, rel)
+        return ed
+    }
+
+    /** Beat events of the last second (age, strength): detected from the bass energy, or a steady pulse when there is no audio. */
+    private fun hzBeats(p: Project?, o: Overlay, tMs: Long, real: Boolean, rel: Float): FloatArray {
+        val out = ArrayList<Float>()
+        if (!real || p == null) {
+            val iv = 0.62f
+            var k = Math.floor((rel / iv).toDouble()).toInt()
+            while (k >= 0 && rel - k * iv < 1.25f) { out.add(rel - k * iv); out.add(0.7f); k-- }
+            return out.toFloatArray()
+        }
+        val step = 33L
+        val win = 3000L
+        val arr = FloatArray(NBAND + 1)
+        var avg = -1f
+        var last = -10f
+        val tmp = ArrayList<FloatArray>()
+        var tt = Math.max(0L, tMs - win)
+        val t0 = tt
+        while (tt <= tMs) {
+            if (!EqAudio.fill(p, tt, arr)) break
+            val low = arr[NBAND]
+            val now = (tt - t0) / 1000f
+            if (avg < 0f) avg = low
+            avg += (low - avg) * Math.min(1f, 0.033f * 1.5f)
+            if (now > 0.8f && low * 1.2f > avg * 1.22f + 0.04f && now - last > 0.22f && low > 0.18f / 1.2f) {
+                last = now
+                tmp.add(floatArrayOf((tMs - tt) / 1000f, Math.min(1f, 0.5f + low * 1.2f)))
+            }
+            tt += step
+        }
+        for (i in tmp.indices.reversed()) { if (tmp[i][0] <= 1.25f) { out.add(tmp[i][0]); out.add(tmp[i][1]) } }
+        return out.toFloatArray()
     }
 
     /** Draws the overlay centred on the origin of [c] with width [W]. */

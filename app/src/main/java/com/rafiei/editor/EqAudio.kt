@@ -15,9 +15,11 @@ object EqAudio {
 
     class Track(val n: Int, val lv: FloatArray, val bass: FloatArray)
 
-    private val cache = HashMap<String, Track?>()
+    private val cache = LinkedHashMap<String, Track?>() // capped: a 10-minute track costs ~5 MB
     private val loading = HashSet<String>()
     private val done = HashSet<String>()
+    /** Files whose analysis failed once; they get exactly one retry (e.g. after a transient error). */
+    private val failedOnce = HashSet<String>()
     @Volatile
     var listener: (() -> Unit)? = null
 
@@ -28,14 +30,22 @@ object EqAudio {
     fun ensure(path: String) {
         synchronized(cache) {
             if (done.contains(path) || loading.contains(path)) return
+            // a failed analysis is retried once, then treated as permanent for this session
+            if (cache[path] == null && failedOnce.contains(path)) return
             loading.add(path)
         }
         Bg.run {
             val t = analyze(path)
             synchronized(cache) {
                 cache[path] = t
+                if (t == null) failedOnce.add(path)
                 loading.remove(path)
                 done.add(path)
+                while (cache.size > 12) {
+                    val it = cache.entries.iterator()
+                    it.next()
+                    it.remove()
+                }
             }
             Bg.ui { listener?.invoke() }
         }

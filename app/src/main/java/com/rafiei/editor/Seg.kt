@@ -15,19 +15,37 @@ import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
  * "around the body" effects. Masks are computed at low resolution, a few per second of video, and cached.
  */
 object Seg {
-    val IDS = setOf("p_outline", "p_electric", "p_sparkle", "p_butterfly")
+    val IDS = setOf("p_outline", "p_electric", "p_sparkle", "p_butterfly", "p_flame", "p_bluefire", "p_colorflame", "p_blaze", "p_spiral")
     fun isPerson(fx: String) = fx in IDS
 
-    class Frames(val w: Int, val h: Int, val stepMs: Long, val masks: ArrayList<ByteArray>)
-    class Look(val core: Bitmap?, val glow: Bitmap?, val pts: FloatArray, val box: FloatArray)
+    class Frames(val w: Int, val h: Int, val stepMs: Long, val masks: ArrayList<ByteArray>, val shots: ArrayList<Bitmap?> = ArrayList())
+    class Look(val core: Bitmap?, val glow: Bitmap?, val pts: FloatArray, val box: FloatArray, val fill: Bitmap? = null)
 
-    private val frames = HashMap<String, Frames>()
+    private val frames = LinkedHashMap<String, Frames>() // insertion-ordered, capped below: one entry can hold ~25 MB
+    private val MAX_CACHED = 4
     private val failed = HashSet<String>()
     private val busy = HashSet<String>()
     private val looks = LruCache<String, Look>(32)
     @Volatile var onReady: (() -> Unit)? = null
 
     fun key(c: Clip) = c.id + "|" + c.trimStart + "|" + c.trimEnd
+
+    /** Stores a computed Frames and evicts the oldest clips when over the cap
+     *  (references dropped only — recycled bitmaps could still be drawn by the render thread). */
+    private fun store(k: String, f: Frames) {
+        synchronized(this) {
+            frames[k] = f
+            while (frames.size > MAX_CACHED) {
+                val it = frames.entries.iterator()
+                it.next()
+                it.remove()
+            }
+        }
+    }
+
+    /** Clears a previous failure so toggling the effect on again really retries
+     *  (e.g. after a transient OOM or a codec hiccup). */
+    fun retry(c: Clip) { synchronized(this) { failed.remove(key(c)) } }
 
     private fun segOne(seg: com.google.mlkit.vision.segmentation.Segmenter, src: Bitmap): Triple<Int, Int, ByteArray>? {
         return try {
@@ -58,6 +76,7 @@ object Seg {
         val seg = Segmentation.getClient(SelfieSegmenterOptions.Builder().setDetectorMode(SelfieSegmenterOptions.SINGLE_IMAGE_MODE).build())
         try {
             val list = ArrayList<ByteArray>()
+            val shots = ArrayList<Bitmap?>()
             var w = 0
             var h = 0
             if (c.isImage) {
@@ -78,9 +97,11 @@ object Seg {
                 val th = Math.max(16, (dh * sc).toInt())
                 var t = 0L
                 while (t < span) {
-                    val fr = mr.getScaledFrameAtTime((c.trimStart + t) * 1000L, MediaMetadataRetriever.OPTION_CLOSEST, tw, th)
+                    val fr = MediaUtil.frameScaled(mr, c.trimStart + t, MediaMetadataRetriever.OPTION_CLOSEST, tw, th)
                     var m: ByteArray? = null
+                    var shot: Bitmap? = null
                     if (fr != null) {
+                        try { shot = fit(fr, 200).copy(Bitmap.Config.RGB_565, false) } catch (e: Throwable) { }
                         val r = segOne(seg, fr)
                         if (r != null) { w = r.first; h = r.second; m = r.third }
                     }
@@ -89,10 +110,11 @@ object Seg {
                         m = list[list.size - 1]
                     }
                     list.add(m)
+                    shots.add(shot ?: shots.lastOrNull())
                     t += step
                 }
                 if (list.isEmpty() || w == 0) return null
-                return Frames(w, h, step, list)
+                return Frames(w, h, step, list, shots)
             } finally {
                 try { mr.release() } catch (e: Throwable) { }
             }
@@ -112,34 +134,63 @@ object Seg {
         val copy = c.copyOf().also { it.id = c.id }
         Bg.run {
             val f = try { compute(copy, 300) } catch (e: Throwable) { null }
-            synchronized(this) {
-                if (f != null) frames[k] = f else failed.add(k)
-                busy.remove(k)
-            }
+            if (f != null) store(k, f) else synchronized(this) { failed.add(k) }
+            busy.remove(k)
             Bg.ui { onReady?.invoke() }
         }
     }
 
     /** Computes everything needed for the export (call off the main thread). */
+    fun needed(p: Project): Boolean = p.fxs.any { isPerson(it.fx) } || p.clips.any { it.cut.isNotEmpty() } || p.overlays.any { (it.kind == "text" && it.tfx == "ring") || (it.kind == "eq" && Eq.tplOf(it).behind) }
+
     fun prepareBlocking(p: Project) {
-        val need = p.fxs.filter { isPerson(it.fx) }
-        if (need.isEmpty()) return
+        class Iv(val s: Long, val e: Long)
+        val need = ArrayList<Iv>()
+        for (f in p.fxs) if (isPerson(f.fx)) need.add(Iv(f.startMs, f.endMs()))
+        for (o in p.overlays) if ((o.kind == "text" && o.tfx == "ring") || (o.kind == "eq" && Eq.tplOf(o).behind)) need.add(Iv(o.startMs, o.endMs()))
+        val anyCut = p.clips.any { it.cut.isNotEmpty() }
+        if (need.isEmpty() && !anyCut) return
         var start = 0L
         for (c in p.clips) {
             val s = start
             val e = start + c.durMs()
             start = e
-            if (need.none { it.startMs < e && it.endMs() > s }) continue
+            if (c.cut.isEmpty() && need.none { it.s < e && it.e > s }) continue
             val k = key(c)
             if (frames.containsKey(k) || failed.contains(k)) continue
             val f = try { compute(c, 300) } catch (e2: Throwable) { null }
-            synchronized(this) { if (f != null) frames[k] = f else failed.add(k) }
+            if (f != null) store(k, f) else synchronized(this) { failed.add(k) }
         }
     }
 
-    fun lookAt(c: Clip, relMs: Long): Look? {
+    /** Small copy of the video frame near [relMs] (used by the TV of the room design). */
+    fun shotAt(c: Clip, relMs: Long): Bitmap? {
+        val fr = synchronized(this) { frames[key(c)] } ?: return null
+        if (fr.shots.isEmpty()) return null
+        val idx = Math.max(0, Math.min(fr.shots.size - 1, (((relMs * c.speed).toLong()) / fr.stepMs).toInt()))
+        return fr.shots[idx]
+    }
+
+    /**
+     * Person look for the frame at [relMs]. When [sync] is true (final render) a cache miss is
+     * recomputed on the spot instead of returning nothing — a silently missing mask would leave
+     * the design out of the exported file. Preview keeps the async path.
+     */
+    fun lookAt(c: Clip, relMs: Long, sync: Boolean = false): Look? {
         val k = key(c)
-        val fr = synchronized(this) { frames[k] } ?: run { request(c); return null }
+        var fr = synchronized(this) { frames[k] }
+        if (fr == null) {
+            if (!sync) {
+                request(c)
+                return null
+            }
+            val go = synchronized(this) { !failed.contains(k) && busy.add(k) }
+            if (!go) return null
+            val f = try { compute(c, 300) } catch (e: Throwable) { null }
+            if (f != null) store(k, f) else synchronized(this) { failed.add(k) }
+            synchronized(this) { busy.remove(k) }
+            fr = synchronized(this) { frames[k] } ?: return null
+        }
         val idx = if (c.isImage) 0 else Math.max(0, Math.min(fr.masks.size - 1, (((relMs * c.speed).toLong()) / fr.stepMs).toInt()))
         val lk = k + "#" + idx
         var l = looks.get(lk)
@@ -196,8 +247,11 @@ object Seg {
                 k++
             }
         }
+        val fillPx = IntArray(n)
+        for (i in 0 until n) if (inside[i]) fillPx[i] = Color.WHITE
+        val fb = Bitmap.createBitmap(fillPx, w, h, Bitmap.Config.ARGB_8888)
         val cb = Bitmap.createBitmap(core, w, h, Bitmap.Config.ARGB_8888)
         val gb = Bitmap.createBitmap(glow, w, h, Bitmap.Config.ARGB_8888)
-        return Look(cb, gb, pts.toFloatArray(), floatArrayOf(minX.toFloat() / w, minY.toFloat() / h, (maxX + 1f) / w, (maxY + 1f) / h))
+        return Look(cb, gb, pts.toFloatArray(), floatArrayOf(minX.toFloat() / w, minY.toFloat() / h, (maxX + 1f) / w, (maxY + 1f) / h), fb)
     }
 }

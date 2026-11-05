@@ -57,7 +57,7 @@ fun EditorActivity.openEqPanel(existing: Overlay?) {
     val root = lin(true)
     root.setBackgroundColor(C.PANEL)
     val holder = FrameLayout(this)
-    val tabs = listOf(L("طرح", "Design"), L("نوشته", "Text"), L("رنگ", "Colors"), L("میله‌ها", "Bars"), L("پس‌زمینه", "Background"), L("اندازه", "Size"))
+    val tabs = listOf(L("طرح", "Design"), L("نوشته", "Text"), L("رنگ", "Colors"), L("میله‌ها", "Bars"), L("پس‌زمینه", "Background"), L("اندازه", "Size"), L("ویژهٔ طرح", "Design"))
     lateinit var show: (Int) -> Unit
 
     fun scrollBox(v: View): View {
@@ -262,6 +262,7 @@ fun EditorActivity.openEqPanel(existing: Overlay?) {
             2 -> colorsTab()
             3 -> barsTab()
             4 -> bgTab()
+            6 -> hzTab(o, { changed() }, { show(6) })
             else -> sizeTab()
         }
         holder.addView(v, FrameLayout.LayoutParams(MATCH, MATCH))

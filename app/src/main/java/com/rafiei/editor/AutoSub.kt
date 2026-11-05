@@ -17,7 +17,20 @@ import java.nio.ByteOrder
 
 /** Automatic subtitles (experimental): the audio is cut into short pieces and each piece goes through the phone's speech recogniser. */
 object AutoSub {
-    /** Decodes the audio of [path] between [fromMs] and [toMs] to 16 kHz mono PCM. */
+    /** Hard cap for one in-memory PCM buffer: 48M samples = 50 minutes of 16 kHz audio (~96 MB). */
+    private const val MAX_PCM_SAMPLES = 48_000_000
+
+    /**
+     * Decodes the audio of [path] between [fromMs] and [toMs] to 16 kHz mono PCM.
+     *
+     * Correctness notes:
+     *  - The container only allows seeking to a sync point at or BEFORE [fromMs]; every sample the
+     *    decoder emits before [fromMs] is discarded, so recognition times line up with the selected
+     *    range (previously this audio leaked in and shifted every subtitle earlier).
+     *  - Output stops exactly at [toMs] at sample granularity.
+     *  - Checked against [cancelFlag] continuously, so "Stop" really stops the decode.
+     *  - 44.1/48 kHz sources are box-filtered while decimating to reduce aliasing into the ASR band.
+     */
     fun decode16k(path: String, fromMs: Long, toMs: Long): ShortArray? {
         val ex = MediaExtractor()
         var codec: MediaCodec? = null
@@ -30,21 +43,31 @@ object AutoSub {
                 if ((f.getString(MediaFormat.KEY_MIME) ?: "").startsWith("audio/")) { ti = i; fmt = f; break }
             }
             if (ti < 0 || fmt == null) return null
+            var sr = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            var ch = Math.max(1, if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2)
             ex.selectTrack(ti)
             ex.seekTo(fromMs * 1000L, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            // The extractor now sits on a sync point at or before fromMs. Compute how many source
+            // frames must be dropped so the first kept sample is the one at/after fromMs.
+            val syncUs = Math.max(0L, ex.sampleTime)
+            var skip = if (syncUs < fromMs * 1000L) (fromMs * 1000L - syncUs) * sr / 1_000_000L else 0L
+            // Last source frame (relative to the sync point) that belongs to the range.
+            val lastFrame = if (toMs > fromMs) (toMs * 1000L - Math.max(syncUs, 0L)).coerceAtLeast(0L) * sr / 1_000_000L else 0L
             codec = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
             codec.configure(fmt, null, null, 0)
             codec.start()
-            var sr = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
-            var ch = if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
-            val out = ArrayList<Short>()
+            var outBuf = ShortArray(1 shl 18)
+            var outN = 0
             val info = MediaCodec.BufferInfo()
             var inDone = false
             var outDone = false
             var pos = 0.0 // position in source samples, used for resampling
             var next = 0.0
+            var srcFrame = 0L // source frames consumed since the sync point
             var guard = 0
             while (!outDone) {
+                if (cancelFlag) return null
+                if (srcFrame > lastFrame) break // sample-exact end of the requested range
                 if (!inDone) {
                     val ib = codec.dequeueInputBuffer(10000)
                     if (ib >= 0) {
@@ -67,16 +90,34 @@ object AutoSub {
                         b.limit(info.offset + info.size)
                         val sb = b.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
                         val step = sr / 16000.0
+                        val w = Math.max(1, Math.floor(step).toInt()) // box-filter width (anti-aliasing)
                         var i = 0
                         val total = sb.remaining()
                         while (i + ch <= total) {
+                            if (srcFrame > lastFrame) break
+                            if (skip > 0) { skip--; srcFrame++; i += ch; continue }
                             if (pos >= next) {
                                 var s = 0
-                                for (c in 0 until ch) s += sb.get(i + c)
-                                out.add((s / ch).toShort())
+                                if (step > 1.5) {
+                                    // average w frames so high frequencies fold instead of aliasing
+                                    val ww = Math.min(w, (total - i) / ch)
+                                    for (c in 0 until ch) {
+                                        var acc = 0
+                                        for (k in 0 until ww) acc += sb.get(i + k * ch + c)
+                                        s += acc / ww
+                                    }
+                                } else {
+                                    for (c in 0 until ch) s += sb.get(i + c)
+                                }
+                                if (outN >= outBuf.size) {
+                                    if (outBuf.size >= MAX_PCM_SAMPLES) return null // range too long for one pass
+                                    outBuf = outBuf.copyOf(Math.min(MAX_PCM_SAMPLES.toLong(), outBuf.size * 2L).toInt())
+                                }
+                                outBuf[outN++] = (s / ch).toShort()
                                 next += step
                             }
                             pos += 1.0
+                            srcFrame++
                             i += ch
                         }
                     }
@@ -91,10 +132,11 @@ object AutoSub {
                     if (inDone && guard > 3000) break
                 }
             }
-            val arr = ShortArray(out.size)
-            for (i in arr.indices) arr[i] = out[i]
-            return arr
+            if (cancelFlag) return null
+            if (outN == 0) return null
+            return outBuf.copyOf(outN)
         } catch (e: Throwable) {
+            println("RafieiEditor decode16k failed: " + e.javaClass.simpleName + ": " + e.message)
             return null
         } finally {
             try { codec?.stop() } catch (e: Throwable) { }
