@@ -134,6 +134,7 @@ private fun shapePath(m: ClipMask, w: Float, h: Float, tl: Float): Path {
             }
             val mt2 = android.graphics.Matrix()
             mt2.postTranslate(w / 2f, h / 2f)
+            if (rot != 0f) mt2.postRotate(rot, w / 2f, h / 2f) // strips previously ignored the rotation
             p.transform(mt2)
             return p
         }
@@ -166,13 +167,17 @@ fun drawMask(c: Canvas, rect: FloatArray, m: ClipMask, clipRelMs: Long) {
     val f = m.feather * Math.min(w, h)
     if (f > 0.5f) p.maskFilter = BlurMaskFilter(f, BlurMaskFilter.Blur.NORMAL)
     if (m.invert) {
-        // visible = outside the shape: cover the shape instead
+        // inverted: only the shape is covered, the outside stays visible. The full-cover
+        // layer above must NOT be composited (that used to paint the whole clip), so drop it
+        // and fill the shape directly over the clip content instead.
         c.restoreToCount(sc)
-        val sc2 = c.saveLayer(rect[0], rect[1], rect[0] + w, rect[1] + h, null)
+        val sc2 = c.save()
         c.translate(rect[0], rect[1])
         c.clipRect(0f, 0f, w, h)
-        val q = Paint(Paint.ANTI_ALIAS_FLAG)
+        val q = maskPaint
+        q.reset(); q.isAntiAlias = true
         q.color = m.outColor
+        q.style = Paint.Style.FILL
         if (f > 0.5f) q.maskFilter = BlurMaskFilter(f, BlurMaskFilter.Blur.NORMAL)
         c.drawPath(path, q)
         c.restoreToCount(sc2)

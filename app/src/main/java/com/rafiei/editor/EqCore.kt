@@ -112,11 +112,15 @@ class EqState {
     var dance = true
     var waveSpan = 0.26f
     var P: HashMap<String, Rgb> = HashMap()
+    var cfg: org.json.JSONObject = org.json.JSONObject()
     fun p(k: String): Rgb = P[k] ?: intArrayOf(255, 255, 255)
 }
 
 /** Per-frame audio data. */
-class EqData(val t: Float, val dur: Float, val lv: FloatArray, val bass: Float, val now: Float, val wave: ByteArray?)
+class EqData(val t: Float, val dur: Float, val lv: FloatArray, val bass: Float, val now: Float, val wave: ByteArray?) {
+    /** Detected beats as (age in seconds, strength) pairs, newest first. */
+    var beats: FloatArray = FloatArray(0)
+}
 
 class EqDef(
     val col: Map<String, String>,
@@ -185,6 +189,10 @@ abstract class EqTpl(val id: String, val title: String) {
     var keys: List<String> = KEYS_ALL
     var labels: Map<String, String> = emptyMap()
     open var needsBadge = false
+    /** Drawn behind the person of the user's clip (cut out with the segmentation mask). */
+    open val behind: Boolean = false
+    /** Default text of a new overlay of this design. */
+    open val defText: String? = null
     lateinit var def: EqDef
     /** Optional tint painted over the background (for logo designs). */
     open fun bgTint(g: Ctx2D, P: Map<String, Rgb>) {}

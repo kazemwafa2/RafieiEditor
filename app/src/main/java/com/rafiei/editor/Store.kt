@@ -22,9 +22,13 @@ object Store {
         p.modified = System.currentTimeMillis()
         val tmp = File(draftsDir(c), p.id + ".tmp")
         tmp.writeText(p.toJson().toString())
-        val dst = jsonFile(c, p.id)
-        if (dst.exists()) dst.delete()
-        tmp.renameTo(dst)
+        // rename(2) replaces the destination atomically on Android (Linux); deleting the
+        // destination first would open a window where a crash loses the whole draft.
+        if (!tmp.renameTo(jsonFile(c, p.id))) {
+            // extremely rare (cross-device rename); fall back to a direct write
+            try { jsonFile(c, p.id).writeText(p.toJson().toString()) } catch (e: Throwable) { }
+            tmp.delete()
+        }
     }
 
     fun load(c: Context, id: String): Project? {
@@ -32,6 +36,7 @@ object Store {
             val f = jsonFile(c, id)
             if (!f.exists()) null else Project.fromJson(JSONObject(f.readText()))
         } catch (e: Exception) {
+            println("RafieiEditor draft $id unreadable: " + e.javaClass.simpleName)
             null
         }
     }
@@ -44,7 +49,7 @@ object Store {
                 try {
                     out.add(Project.fromJson(JSONObject(f.readText())))
                 } catch (e: Exception) {
-                    // ignore corrupt draft
+                    println("RafieiEditor draft " + f.name + " corrupt: " + e.javaClass.simpleName) // visible, not silent
                 }
             }
         }
@@ -88,8 +93,9 @@ object Store {
     fun saveJson(c: Context, id: String, json: String) {
         val tmp = File(draftsDir(c), "$id.tmp")
         tmp.writeText(json)
-        val dst = jsonFile(c, id)
-        if (dst.exists()) dst.delete()
-        tmp.renameTo(dst)
+        if (!tmp.renameTo(jsonFile(c, id))) {
+            try { jsonFile(c, id).writeText(json) } catch (e: Throwable) { }
+            tmp.delete()
+        }
     }
 }

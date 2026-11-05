@@ -18,6 +18,12 @@ class Biquad(ch: Int) {
         return y
     }
 
+    /** Clears the delay-line state (seek / flush must not carry old audio into new audio). */
+    fun reset() {
+        java.util.Arrays.fill(z1, 0.0)
+        java.util.Arrays.fill(z2, 0.0)
+    }
+
     private fun set(nb0: Double, nb1: Double, nb2: Double, na0: Double, na1: Double, na2: Double) {
         b0 = nb0 / na0; b1 = nb1 / na0; b2 = nb2 / na0; a1 = na1 / na0; a2 = na2 / na0
     }
@@ -131,7 +137,7 @@ class FxAudioProcessor(
 
     override fun onFlush() {
         env = 0.0; floor = 0.01; gate = 1.0; comp = 1.0
-        for (f in filters) { /* state is rebuilt on configure */ }
+        for (f in filters) f.reset()
     }
 }
 

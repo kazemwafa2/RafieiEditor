@@ -7,6 +7,7 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.common.Effect
@@ -94,6 +95,7 @@ class TimelineOverlay(private val p: Project, private val W: Int, private val H:
         androidx.media3.effect.OverlaySettings.Builder().build()
 
     override fun getBitmap(presentationTimeUs: Long): Bitmap {
+        Render.exportRender.set(true) // mask misses inside this pass are recomputed, never silently skipped
         val t = presentationTimeUs / 1000L
         val k = key(t)
         if (k == lastKey) return last
@@ -111,7 +113,7 @@ class TimelineOverlay(private val p: Project, private val W: Int, private val H:
 
 object Exporter {
 
-    class Result(val composition: Composition, val totalMs: Long, val overlay: Boolean = false)
+    class Result(val composition: Composition, val totalMs: Long, val overlay: Boolean = false, val warnings: List<String> = emptyList())
 
     private fun speedEffect(speed: Float): Effect? {
         return try {
@@ -153,9 +155,11 @@ object Exporter {
 
     fun build(ctx: Context, src: Project, outW: Int, outH: Int, safe: Boolean, fps: Int = 0): Result {
         val p = copyProject(src)
-        if (p.fxs.any { Seg.isPerson(it.fx) }) Seg.prepareBlocking(p)
+        if (Seg.needed(p)) Seg.prepareBlocking(p)
         if (p.overlays.any { it.kind == "eq" } || p.audios.any { it.duck > 0.01f }) EqAudio.prepareBlocking(p)
         val total = p.totalMs()
+        val warnings = ArrayList<String>()
+        var speedMissing = false
         val videoItems = ArrayList<EditedMediaItem>()
         var start = 0L
         for (i in p.clips.indices) {
@@ -171,7 +175,7 @@ object Exporter {
             val fx = ArrayList<Effect>()
             if (!safe && !c.isImage && Math.abs(c.speed - 1f) > 0.001f) {
                 val se = speedEffect(c.speed)
-                if (se != null) fx.add(se)
+                if (se != null) fx.add(se) else speedMissing = true // never silently drop the speed
             }
             if (c.flipH || c.flipV) {
                 fx.add(ScaleAndRotateTransformation.Builder().setScale(if (c.flipH) -1f else 1f, if (c.flipV) -1f else 1f).build())
@@ -265,10 +269,12 @@ object Exporter {
             val items = ArrayList<EditedMediaItem>()
             var cursor = 0L
             for (a in lane) {
-                val gap = a.startMs - cursor
-                if (gap > 20) items.addAll(silenceItems(ctx, gap))
+                // decide whether the item is used BEFORE emitting its leading gap silence,
+                // otherwise a skipped item shifts everything after it on this lane
                 val maxDur = Math.min(a.durMs(), total - a.startMs)
                 if (maxDur < 100) continue
+                val gap = a.startMs - cursor
+                if (gap > 20) items.addAll(silenceItems(ctx, gap))
                 val srcEnd = Math.min(a.trimEnd, a.trimStart + (maxDur * a.speed).toLong())
                 val mi = MediaItem.Builder().setUri(Uri.parse(a.uri))
                     .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setStartPositionMs(a.trimStart).setEndPositionMs(srcEnd).build())
@@ -311,16 +317,90 @@ object Exporter {
                 val m = Class.forName("androidx.media3.effect.FrameDropEffect").getMethod("createDefaultFrameDropEffect", java.lang.Float.TYPE)
                 compEffects.add(m.invoke(null, fps.toFloat()) as Effect)
             } catch (e: Throwable) {
+                warnings.add("fps")
             }
         }
+        if (speedMissing) warnings.add("speed")
         if (compEffects.isNotEmpty()) builder.setEffects(Effects(ArrayList<AudioProcessor>(), compEffects))
-        return Result(builder.build(), total, overlayUsed)
+        return Result(builder.build(), total, overlayUsed, warnings)
+    }
+
+    /**
+     * Second pass: takes an already rendered video file and draws the whole overlay layer (effects, designs, text,
+     * stickers) on it as the item's own effect. This is the plain "watermark" use of Media3 and is used when the
+     * first pass came out without the overlay.
+     */
+    fun buildOverlayPass(src: Project, input: File, outW: Int, outH: Int): Composition {
+        val p = copyProject(src)
+        if (Seg.needed(p)) Seg.prepareBlocking(p)
+        if (p.overlays.any { it.kind == "eq" } || p.audios.any { it.duck > 0.01f }) EqAudio.prepareBlocking(p)
+        val overlay = TimelineOverlay(p, outW, outH)
+        val fx = ArrayList<Effect>()
+        fx.add(OverlayEffect(ImmutableList.of<TextureOverlay>(overlay)))
+        val item = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(input))).setEffects(Effects(ArrayList<AudioProcessor>(), fx)).build()
+        val items = ArrayList<EditedMediaItem>()
+        items.add(item)
+        val seqs = ArrayList<EditedMediaItemSequence>()
+        seqs.add(EditedMediaItemSequence(items))
+        return Composition.Builder(seqs).build()
+    }
+
+    /**
+     * Checks a rendered file: at a moment where the overlay layer has solid pixels, the frame of the file must show them.
+     * Returns true (overlay is in the file), false (it is missing) or null (nothing solid to compare / could not decide).
+     */
+    fun overlayVisible(src: Project, file: File, outW: Int, outH: Int): Boolean? {
+        return try {
+            val p = copyProject(src)
+            val total = p.totalMs()
+            if (total < 300) return null
+            val w = 240
+            val h = Math.max(16, Math.round(240f * outH / outW))
+            Render.exportRender.set(true)
+            val mr = MediaMetadataRetriever()
+            mr.setDataSource(file.absolutePath)
+            try {
+                for (k in 1..12) {
+                    val t = total * k / 13L
+                    val ov = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    Render.drawTop(Canvas(ov), w, h, p, t)
+                    val op = IntArray(w * h)
+                    ov.getPixels(op, 0, w, 0, 0, w, h)
+                    var solid = 0
+                    for (px in op) if ((px ushr 24) >= 235) solid++
+                    ov.recycle()
+                    if (solid < w * h * 0.03f) continue
+                    val fr = mr.getFrameAtTime(t * 1000L, MediaMetadataRetriever.OPTION_CLOSEST) ?: return null
+                    val sc = Bitmap.createScaledBitmap(fr, w, h, true)
+                    val fp = IntArray(w * h)
+                    sc.getPixels(fp, 0, w, 0, 0, w, h)
+                    var same = 0
+                    for (i in op.indices) {
+                        val a = op[i]
+                        if ((a ushr 24) < 235) continue
+                        val f = fp[i]
+                        val d = (Math.abs(((a shr 16) and 255) - ((f shr 16) and 255)) + Math.abs(((a shr 8) and 255) - ((f shr 8) and 255)) + Math.abs((a and 255) - (f and 255))) / 3
+                        if (d < 60) same++
+                    }
+                    return same >= solid * 0.5f
+                }
+                null
+            } finally {
+                try { mr.release() } catch (e: Throwable) { }
+            }
+        } catch (e: Throwable) {
+            println("RafieiEditor overlay check failed: " + e.javaClass.simpleName)
+            null
+        }
     }
 
     private fun needsOverlay(p: Project, W: Int, H: Int): Boolean {
         if (p.overlays.isNotEmpty()) return true
         for (f in p.fxs) if (Fx.fxDef(f.fx).overlay) return true
         for (c in p.clips) {
+            // background removal / replacement is drawn in the overlay pass; without this check
+            // a project whose only effect is the replacement exported the untouched original video
+            if (c.cut.isNotEmpty()) return true
             if (Fx.vignetteOf(c) > 0.01f || Fx.grainOf(c) > 0.01f || ClipLight.of(c) != null || ClipMask.of(c) != null) return true
             if (c.motion.isNotEmpty() && Motion.hasOverlayPost(c.motion)) return true
             if (!c.fill) {
@@ -332,14 +412,15 @@ object Exporter {
         return false
     }
 
-    fun bitrateFor(w: Int, h: Int, quality: Int): Int {
+    fun bitrateFor(w: Int, h: Int, quality: Int, fps: Int = 30): Int {
         val bpp = when (quality) {
             0 -> 0.06f
             1 -> 0.09f
             2 -> 0.13f
             else -> 0.20f
         }
-        val v = (w.toLong() * h * 30L * bpp).toLong()
+        val f = if (fps in 1..120) fps.toLong() else 30L
+        val v = (w.toLong() * h * f * bpp).toLong()
         return clampL(v, 800_000L, 80_000_000L).toInt()
     }
 
@@ -347,10 +428,13 @@ object Exporter {
     fun renderPhoto(ctx: Context, src: Project, W: Int, H: Int): Bitmap? {
         val p = copyProject(src)
         if (p.clips.isEmpty()) return null
+        // person masks must exist BEFORE drawing, otherwise the replaced background is silently missing from the saved photo
+        if (Seg.needed(p)) Seg.prepareBlocking(p)
         val clip = p.clips[0]
         val bmp = MediaUtil.loadBitmapFile(MediaUtil.pathOf(clip.uri), 4096) ?: return null
         val out = Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
+        Render.exportRender.set(true) // same guarantee as the video export overlay pass
         Render.drawBackground(c, W, H, p, 0, false, true, null)
         val r = Geo.clipRect(clip, W.toFloat(), H.toFloat())
         val s = r[2] / clip.dispW().toFloat()

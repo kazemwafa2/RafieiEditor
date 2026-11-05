@@ -52,6 +52,8 @@ class Clip {
     var motion = ""
     var motionAmt = 1f
     var kf = ""
+    /** Background removal: JSON {m: color|grad|image, c1, c2, uri, soft}. Empty = off. */
+    var cut = ""
 
     fun durMs(): Long = if (isImage) imgDur else Math.max(100L, ((trimEnd - trimStart) / speed).toLong())
     fun dispW(): Int = if (rot % 180 == 0) w else h
@@ -74,6 +76,7 @@ class Clip {
         if (light.isNotEmpty()) o.put("light", light)
         if (mask.isNotEmpty()) o.put("mask", mask)
         if (kf.isNotEmpty()) o.put("kf", kf)
+        if (cut.isNotEmpty()) o.put("cut", cut)
         if (motion.isNotEmpty()) { o.put("mo", motion); o.put("moa", motionAmt.toDouble()) }
         return o
     }
@@ -96,6 +99,7 @@ class Clip {
             c.light = o.optString("light", "")
             c.mask = o.optString("mask", "")
             c.kf = o.optString("kf", "")
+            c.cut = o.optString("cut", "")
             c.motion = o.optString("mo", ""); c.motionAmt = o.optDouble("moa", 1.0).toFloat()
             return c
         }
@@ -183,7 +187,10 @@ class Overlay {
     var shadowColor = Color.BLACK
     var bgColor = Color.BLACK
     var bgAlpha = 0f
-    var tfx = "none" // text effect: none | echo | echoh | glass | neon
+    var tfx = "none" // text effect: none | echo | echoh | glass | neon | glitch | rainbow | sweep | wave | pop
+    var words = "" // subtitle words, JSON [[word, relStartMs, relEndMs], ...] relative to startMs
+    var smode = "line" // subtitle display: line | kar (progressive highlight) | hl (current word) | word (one word at a time)
+    var hiColor = 0xFFFFD93D.toInt() // highlight colour for the spoken word
 
     // sticker / image
     var glyph = ""
@@ -213,6 +220,7 @@ class Overlay {
         o.put("b", bold); o.put("i", italic); o.put("al", align); o.put("sp", spacing.toDouble())
         o.put("oc", outlineColor); o.put("ow", outlineW.toDouble()); o.put("sh", shadow.toDouble()); o.put("shc", shadowColor)
         o.put("bc", bgColor); o.put("ba", bgAlpha.toDouble()); if (tfx != "none") o.put("tfx", tfx)
+        if (words.isNotEmpty()) { o.put("wd", words); o.put("sm", smode); o.put("hc", hiColor) }
         o.put("glyph", glyph); o.put("uri", uri); o.put("cfg", cfg); o.put("asp", imgAspect.toDouble())
         if (nf > 0) { o.put("frd", frames); o.put("fps", fps); o.put("nf", nf) }
         if (chroma != 0) { o.put("ck", chroma); o.put("ckt", chromaTol.toDouble()); o.put("cks", chromaSoft.toDouble()) }
@@ -233,6 +241,7 @@ class Overlay {
             v.outlineColor = o.optInt("oc", Color.BLACK); v.outlineW = o.optDouble("ow", 0.0).toFloat()
             v.shadow = o.optDouble("sh", 0.0).toFloat(); v.shadowColor = o.optInt("shc", Color.BLACK)
             v.bgColor = o.optInt("bc", Color.BLACK); v.bgAlpha = o.optDouble("ba", 0.0).toFloat(); v.tfx = o.optString("tfx", "none")
+            v.words = o.optString("wd"); v.smode = o.optString("sm", "line"); v.hiColor = o.optInt("hc", 0xFFFFD93D.toInt())
             v.glyph = o.optString("glyph"); v.uri = o.optString("uri"); v.cfg = o.optString("cfg"); v.imgAspect = o.optDouble("asp", 1.0).toFloat()
             v.frames = o.optString("frd"); v.fps = o.optInt("fps", 10); v.nf = o.optInt("nf", 0)
             v.chroma = o.optInt("ck", 0); v.chromaTol = o.optDouble("ckt", 0.3).toFloat(); v.chromaSoft = o.optDouble("cks", 0.12).toFloat()

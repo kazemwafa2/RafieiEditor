@@ -247,6 +247,19 @@ object Fx {
         FxDef("p_electric", "برق دور بدن (هوشمند)", "Body lightning (smart)", true, 0xFFB388FF.toInt()),
         FxDef("p_sparkle", "درخشش دور بدن (هوشمند)", "Body sparkles (smart)", true, 0xFFFFFFFF.toInt()),
         FxDef("p_butterfly", "پروانه دور سوژه (هوشمند)", "Butterflies around person (smart)", true, 0xFF29B6F6.toInt()),
+        FxDef("p_flame", "شعله رنگی دور بدن (هوشمند)", "Color flame (smart)", true, 0xFFFF9800.toInt()),
+        FxDef("p_blaze", "انفجار آتش دور بدن (هوشمند)", "Blaze burst (smart)", true, 0xFFFFC107.toInt()),
+        FxDef("p_bluefire", "آتش آبی دور بدن (هوشمند)", "Blue fire (smart)", true, 0xFF40C4FF.toInt()),
+        FxDef("p_colorflame", "آتش رنگین‌کمانی (هوشمند)", "Rainbow flame (smart)", true, 0xFFE040FB.toInt()),
+        FxDef("p_spiral", "نئون مارپیچ دور بدن (هوشمند)", "Neon spiral on body (smart)", true, 0xFF18E6FF.toInt()),
+        FxDef("clublights", "چراغ‌های باشگاه", "Club lights", true, 0xFFE040FB.toInt()),
+        FxDef("fireplace", "شومینه / آتش پایین", "Fireplace", true, 0xFFFF6A00.toInt()),
+        FxDef("crossflash", "فلاش ستاره‌ای", "Cross flash", true, 0xFFFFFFFF.toInt()),
+        FxDef("discolor", "فلاش بی‌رنگ‌شدن", "Discoloring flash", false, 0xFFB0BEC5.toInt()),
+        FxDef("colorful", "رنگارنگ", "Colorful", false, 0xFFFF4081.toInt()),
+        FxDef("synchud", "SYNC با مخروط نور", "SYNC light cone", true, 0xFFBFD8FF.toInt()),
+        FxDef("glowgrid", "نقطه‌های درخشان کف", "Glow dot floor", true, 0xFFFFFFFF.toInt()),
+        FxDef("neonring", "حلقهٔ نئون لوگو", "Neon logo ring", true, 0xFFB26BFF.toInt()),
         FxDef("light", "نور استودیو (بازه‌ای)", "Studio light (range)", true, 0xFFFFE6C8.toInt()),
         FxDef("mask", "ماسک (بازه‌ای)", "Mask (range)", true, 0xFF90CAF9.toInt())
     ) + FILTERS.filter { it.id != "none" }.map { FxDef("flt_" + it.id, it.fa, it.en, false, 0xFF90A4AE.toInt()) }
@@ -485,6 +498,18 @@ object Fx {
                 d.s *= 1f + 0.35f * a
             }
             "rainbow" -> d.hue += tt * 0.18f
+            "discolor" -> {
+                val ph = (tt % 900f) / 900f
+                val k = Math.sin(ph * Math.PI).toFloat()
+                d.sat *= 1f - 0.95f * a * k
+                d.contrast *= 1f + 0.35f * a * k
+                if (ph < 0.07f) d.white += a * 0.7f * (1f - ph / 0.07f)
+            }
+            "colorful" -> {
+                d.hue += Math.sin(tt / 1400.0 * 2.0 * Math.PI).toFloat() * 55f * a
+                d.sat *= 1f + 0.7f * a
+                d.contrast *= 1f + 0.12f * a
+            }
             "bw" -> d.sat *= 1f - clampF(a * 1.4f, 0f, 1f)
             "negative" -> d.invert += a
             "fade_in" -> d.dark += 1f - u

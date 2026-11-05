@@ -148,6 +148,8 @@ class HomeActivity : Activity() {
         items.add(L("بازیابی از فایل پشتیبان", "Restore from backup"))
         items.add(L("بانک زبان‌ها (هزارگی و ...)", "Language bank"))
         items.add(L("بسته‌ها (فونت) — دانلود اختیاری", "Packs (fonts) — optional download"))
+        items.add(L("درباره ما و تماس با ما", "About us and contact"))
+        items.add(L("بررسی به‌روزرسانی", "Check for update"))
         if (crash.exists()) items.add(L("گزارش آخرین خطا (ارسال با اجازه‌ی شما)", "Last error report (shared only if you choose)"))
         Dialogs.choose(this, L("تنظیمات", "Settings"), items) { idx ->
             when (idx) {
@@ -161,7 +163,7 @@ class HomeActivity : Activity() {
                         startActivity(Intent.createChooser(i, L("معرفی برنامه", "Share")))
                     } catch (e: Exception) { }
                 }
-                3 -> {
+                3 -> Compat.ensureStorage(this@HomeActivity) {
                     val dlg = android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setMessage(L("در حال ساخت فایل پشتیبان…", "Creating backup…")).setCancelable(false).create()
                     dlg.show()
                     val ctx = applicationContext
@@ -181,6 +183,8 @@ class HomeActivity : Activity() {
                 }
                 5 -> openLangBank()
                 6 -> openPackManager()
+                7 -> startActivity(Intent(this, AboutActivity::class.java))
+                8 -> Updater.check(this)
                 else -> {
                     val txt = try { crash.readText() } catch (e: Exception) { "" }
                     Dialogs.confirm(this, L("گزارش خطا", "Error report"), txt.take(900) + "\n\n" + L("فقط همین متن (بدون فایل‌های شما) ارسال می‌شود.", "Only this text (none of your files) is sent."), L("ارسال", "Send")) {
@@ -212,9 +216,17 @@ class HomeActivity : Activity() {
         }
     }
 
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        Compat.onPermResult(this, requestCode, grantResults)
+    }
+
     private fun refreshDraftCount() {
-        val n = Store.list(this).size
-        draftsLabel.text = if (Lang.fa) "$n پیش‌نویس  ›" else "$n DRAFTS  ›"
+        // Store.list parses every draft JSON — never do that on the main thread
+        Bg.run {
+            val n = Store.list(this).size
+            Bg.ui { draftsLabel.text = if (Lang.fa) "$n پیش‌نویس  ›" else "$n DRAFTS  ›" }
+        }
     }
 
     // ------------------------------------------------------------ drafts sheet
@@ -242,13 +254,9 @@ class HomeActivity : Activity() {
         top.addView(nw, fl(WRAP, dp(32), Gravity.CENTER_VERTICAL or Gravity.END))
         panel.addView(top, lp(MATCH, dp(40)))
 
-        val list = Store.list(this)
         val sv = ScrollView(this)
         val lc = lin(true)
-        if (list.isEmpty()) {
-            lc.addView(tv(L("هنوز پیش‌نویسی ندارید.", "No drafts yet."), 13f, C.TXT2), lp(MATCH, dp(90)))
-        }
-        for (p in list) lc.addView(draftRow(p), lp(MATCH, dp(76)))
+        lc.addView(tv(L("در حال بارگذاری…", "Loading…"), 13f, C.TXT2), lp(MATCH, dp(90)))
         sv.addView(lc)
         panel.addView(sv, lp(MATCH, WRAP))
         val ph = (resources.displayMetrics.heightPixels * 0.62f).toInt()
@@ -256,6 +264,16 @@ class HomeActivity : Activity() {
         panel.minimumHeight = Math.min(ph, dp(200))
         root.addView(s, FrameLayout.LayoutParams(MATCH, MATCH))
         sheet = s
+        // drafts are read and parsed off the main thread, then filled in
+        Bg.run {
+            val list = Store.list(this)
+            Bg.ui {
+                if (sheet !== s) return@ui // the user already closed the sheet
+                lc.removeAllViews()
+                if (list.isEmpty()) lc.addView(tv(L("هنوز پیش‌نویسی ندارید.", "No drafts yet."), 13f, C.TXT2), lp(MATCH, dp(90)))
+                for (p in list) lc.addView(draftRow(p), lp(MATCH, dp(76)))
+            }
+        }
     }
 
     private fun draftRow(p: Project): View {
@@ -303,17 +321,14 @@ class HomeActivity : Activity() {
         Dialogs.choose(this, L("پیش‌نویس", "Draft"), listOf(L("تغییر نام", "Rename"), L("کپی", "Duplicate"), L("حذف", "Delete"))) { idx ->
             when (idx) {
                 0 -> Dialogs.input(this, L("نام پروژه", "Project name"), p.name) { n ->
-                    Store.rename(this, p.id, n)
-                    showDrafts()
+                    Bg.run { Store.rename(this, p.id, n); Bg.ui { showDrafts() } }
                 }
                 1 -> Bg.run {
                     Store.duplicate(this, p.id)
                     Bg.ui { showDrafts(); refreshDraftCount() }
                 }
                 2 -> Dialogs.confirm(this, L("حذف پیش‌نویس؟", "Delete draft?"), L("این کار قابل بازگشت نیست.", "This cannot be undone."), L("حذف", "Delete")) {
-                    Store.delete(this, p.id)
-                    showDrafts()
-                    refreshDraftCount()
+                    Bg.run { Store.delete(this, p.id); Bg.ui { showDrafts(); refreshDraftCount() } }
                 }
             }
         }

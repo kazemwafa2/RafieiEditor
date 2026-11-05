@@ -879,7 +879,8 @@ object Motion {
             "unfold", "fold" -> {
                 val v = hid(P, c)
                 val th = v * P.d("angle") * D2R
-                val an = if (P.d("anchor") == 0.0) (if (base == "fold") 1.0 else 1.0) else P.d("anchor")
+                // anchor defaults to the hinge at 1.0 (0.0 would spin the card around its centre)
+                val an = if (P.d("anchor") == 0.0) 1.0 else P.d("anchor")
                 st.ry += th * an
                 st.tx += -P.d("anchor") * .5 * c.qwF * st.sc * (1 - Math.cos(th))
                 st.alpha *= 1 - clamp(v, 0.0, 1.0) * .4

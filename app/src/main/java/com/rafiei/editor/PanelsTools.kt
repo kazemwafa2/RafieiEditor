@@ -2,9 +2,12 @@ package com.rafiei.editor
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -12,6 +15,30 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import java.util.Locale
+
+/** Writes a subtitle file (.srt / .vtt / .ass) into Downloads/RafieiEditor via MediaStore.
+ *  Returns the visible path on success, null on failure. */
+fun saveSubtitleFile(c: Context, body: String, ext: String): String? {
+    if (body.isEmpty()) return null
+    return try {
+        val name = "RafieiEditor_subs_" + java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date()) + ext
+        val v = ContentValues()
+        v.put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+        v.put(MediaStore.MediaColumns.MIME_TYPE, if (ext == ".srt") "application/x-subrip" else if (ext == ".vtt") "text/vtt" else "text/plain")
+        v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RafieiEditor")
+        val uri = c.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: return null
+        val os = c.contentResolver.openOutputStream(uri)
+        if (os == null) {
+            try { c.contentResolver.delete(uri, null, null) } catch (e: Throwable) { }
+            return null
+        }
+        os.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        "Downloads/RafieiEditor/$name"
+    } catch (e: Throwable) {
+        println("RafieiEditor subtitle save failed: " + e.javaClass.simpleName + ": " + e.message)
+        null
+    }
+}
 
 private fun EditorActivity.tlPill(text: String, active: Boolean = false, onClick: () -> Unit): TextView {
     val t = tv(text, 12.5f, Color.WHITE)
@@ -267,6 +294,53 @@ fun EditorActivity.exportSrtText(): String {
     return sb.toString()
 }
 
+private fun vttStamp(ms: Long): String = srtStamp(ms).replace(',', '.').substring(0)
+
+fun EditorActivity.exportVttText(): String {
+    val subs = proj.overlays.filter { it.kind == "text" && it.glyph == "sub" }.sortedBy { it.startMs }
+    val sb = StringBuilder("WEBVTT\n\n")
+    for (o in subs) {
+        sb.append(vttStamp(o.startMs)).append(" --> ").append(vttStamp(o.startMs + o.durMs)).append('\n')
+        sb.append(o.text).append("\n\n")
+    }
+    return sb.toString()
+}
+
+private fun assStamp(ms: Long): String {
+    val cs = (ms / 10) % 100
+    return String.format(Locale.US, "%d:%02d:%02d.%02d", ms / 3600000L, (ms / 60000L) % 60, (ms / 1000L) % 60, cs)
+}
+
+private fun assColor(c: Int): String = String.format(Locale.US, "&H00%02X%02X%02X", Color.blue(c), Color.green(c), Color.red(c))
+
+/** Advanced SubStation Alpha with karaoke (\k) tags from the word times. */
+fun EditorActivity.exportAssText(): String {
+    val subs = proj.overlays.filter { it.kind == "text" && it.glyph == "sub" }.sortedBy { it.startMs }
+    val f = subs.firstOrNull()
+    val PH = Math.round(1080f / Math.max(0.2f, Geo.aspect(proj)))
+    val sb = StringBuilder()
+    sb.append("[Script Info]\nScriptType: v4.00+\nPlayResX: ").append(1080).append("\nPlayResY: ").append(PH).append("\nWrapStyle: 0\n\n")
+    sb.append("[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
+    val fs = Math.round((f?.size ?: 0.05f) * 1080f)
+    val hi = f?.hiColor ?: 0xFFFFD93D.toInt()
+    val mv = Math.round((1f - (f?.cy ?: 0.86f)) * PH.toFloat())
+    sb.append("Style: Default,Arial,").append(fs).append(',').append(assColor(hi)).append(',').append(assColor(f?.color ?: Color.WHITE)).append(",&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,40,40,").append(mv).append(",1\n\n")
+    sb.append("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+    for (o in subs) {
+        val ws = SubWords.parse(o.words)
+        val body = if (ws.isNotEmpty() && SubWords.join(ws) == o.text) {
+            val b = StringBuilder()
+            for ((i, w) in ws.withIndex()) {
+                val nextS = if (i + 1 < ws.size) ws[i + 1].s else Math.max(w.e, o.durMs)
+                b.append("{\\k").append(Math.max(1L, (nextS - w.s) / 10)).append('}').append(w.w).append(' ')
+            }
+            b.toString().trim()
+        } else o.text.replace("\n", "\\N")
+        sb.append("Dialogue: 0,").append(assStamp(o.startMs)).append(',').append(assStamp(o.startMs + o.durMs)).append(",Default,,0,0,0,,").append(body).append('\n')
+    }
+    return sb.toString()
+}
+
 fun EditorActivity.openSrtMenu() {
     val box = lin(true)
     box.setBackgroundColor(C.PANEL)
@@ -304,7 +378,36 @@ fun EditorActivity.openSrtMenu() {
             }
         }
     ), lp(MATCH, WRAP))
-    box.addView(tlCaption(L("متن SRT هنگام خروجی کپی هم می‌شود تا در یک فایل .srt بچسبانید.", "The SRT text is also copied so you can paste it into a .srt file.")), lp(MATCH, WRAP))
+    fun shareTxt(txt: String, name: String) {
+        if (txt.isEmpty() || !txt.contains("-->") && !txt.contains("Dialogue")) { toast(L("زیرنویسی وجود ندارد.", "There are no subtitles.")); return }
+        try { (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(name, txt)) } catch (e: Exception) { }
+        try {
+            val i = Intent(Intent.ACTION_SEND)
+            i.type = "text/plain"
+            i.putExtra(Intent.EXTRA_TEXT, txt)
+            startActivity(Intent.createChooser(i, name))
+        } catch (e: Exception) { }
+    }
+    box.addView(tlRow(
+        tlPill(L("خروجی VTT", "Export VTT")) { shareTxt(exportVttText(), "VTT") },
+        tlPill(L("خروجی ASS (کاراوکه)", "Export ASS (karaoke)")) { shareTxt(exportAssText(), "ASS") }
+    ), lp(MATCH, WRAP))
+    // real files, not only the clipboard: the subtitle text is written to Downloads/RafieiEditor
+    fun saveFile(txt: String, ext: String) {
+        if (txt.isEmpty()) { toast(L("زیرنویسی وجود ندارد.", "There are no subtitles.")); return }
+        Bg.run {
+            val p = saveSubtitleFile(applicationContext, txt, ext)
+            Bg.ui { toast(if (p != null) L("ذخیره شد: ", "Saved: ") + p else L("ذخیرهٔ فایل ناموفق بود.", "Could not save the file.")) }
+        }
+    }
+    box.addView(tlRow(
+        tlPill(L("ذخیره فایل SRT", "Save SRT file")) { saveFile(exportSrtText(), ".srt") },
+        tlPill(L("ذخیره فایل VTT", "Save VTT file")) { saveFile(exportVttText(), ".vtt") }
+    ), lp(MATCH, WRAP))
+    box.addView(tlRow(
+        tlPill(L("ذخیره فایل ASS (کاراوکه)", "Save ASS file (karaoke)")) { saveFile(exportAssText(), ".ass") }
+    ), lp(MATCH, WRAP))
+    box.addView(tlCaption(L("فایل‌ها در Downloads/RafieiEditor ذخیره می‌شوند و متن هنگام خروجی کپی هم می‌شود.", "Files are saved to Downloads/RafieiEditor; the text is also copied to the clipboard.")), lp(MATCH, WRAP))
     openPanel(box, true)
 }
 

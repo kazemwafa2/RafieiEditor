@@ -26,10 +26,59 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 
 // ------------------------------------------------------------------ small building blocks
+
+/** Custom user presets for the filter/adjust panel (stored in SharedPreferences). */
+object FilterPresets {
+    class P(val name: String, val filter: String, val amt: Float, val adj: FloatArray)
+    private fun prefs(c: Context) = c.getSharedPreferences("rafiei_presets", Context.MODE_PRIVATE)
+
+    fun load(c: Context): List<P> {
+        val out = ArrayList<P>()
+        try {
+            val a = JSONArray(prefs(c).getString("filters", "[]") ?: "[]")
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                val ja = o.optJSONArray("a")
+                val adj = FloatArray(Adj.COUNT) { k -> if (ja != null) ja.optDouble(k, 0.0).toFloat() else 0f }
+                out.add(P(o.getString("n"), o.optString("f", "none"), o.optDouble("amt", 1.0).toFloat(), adj))
+            }
+        } catch (e: Throwable) { }
+        return out
+    }
+
+    fun save(c: Context, p: P) {
+        val list = ArrayList(load(c))
+        list.removeAll { it.name == p.name }
+        list.add(0, p)
+        while (list.size > 24) list.removeAt(list.size - 1)
+        persist(c, list)
+    }
+
+    fun delete(c: Context, name: String) {
+        val list = ArrayList(load(c))
+        list.removeAll { it.name == name }
+        persist(c, list)
+    }
+
+    private fun persist(c: Context, list: List<P>) {
+        val a = JSONArray()
+        for (p in list) {
+            val o = JSONObject()
+            o.put("n", p.name); o.put("f", p.filter); o.put("amt", p.amt.toDouble())
+            val ja = JSONArray()
+            for (v in p.adj) ja.put(v.toDouble())
+            o.put("a", ja)
+            a.put(o)
+        }
+        prefs(c).edit().putString("filters", a.toString()).apply()
+    }
+}
 
 private fun EditorActivity.box(vararg views: View): LinearLayout {
     val l = lin(true)
@@ -237,6 +286,49 @@ private fun showTab(act: EditorActivity, content: FrameLayout, tab: Int, all: ()
         val col = act.lin(true)
         col.addView(act.hScrollOf(row), lp(MATCH, WRAP))
         col.addView(amtRow, lp(MATCH, WRAP))
+        // ---- custom user presets (real persistence in SharedPreferences)
+        val presetRow = act.lin(false)
+        presetRow.setPadding(act.dp(8), act.dp(2), act.dp(8), act.dp(2))
+        val presetScroll = act.hScrollOf(presetRow)
+        fun rebuildPresets() {
+            presetRow.removeAllViews()
+            val list = FilterPresets.load(act)
+            for (ps in list) {
+                val chip = act.tv(ps.name, 11.5f, Color.WHITE)
+                chip.setPadding(act.dp(12), act.dp(6), act.dp(12), act.dp(6))
+                chip.background = roundedBg(C.CARD, act.dpf(14f))
+                chip.setOnClickListener {
+                    for (c in act.targets(all())) { c.filter = ps.filter; c.filterAmt = ps.amt; c.adj = ps.adj.copyOf() }
+                    act.changed()
+                    act.toast(L("پیش‌تنظیم اعمال شد", "Preset applied"))
+                }
+                chip.setOnLongClickListener {
+                    Dialogs.confirm(act, L("حذف پیش‌تنظیم", "Delete preset"), ps.name, L("حذف", "Delete")) {
+                        FilterPresets.delete(act, ps.name)
+                        rebuildPresets()
+                    }
+                    true
+                }
+                val cl = lp(WRAP, WRAP)
+                cl.rightMargin = act.dp(6)
+                presetRow.addView(chip, cl)
+            }
+            presetScroll.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
+        }
+        rebuildPresets()
+        val saveP = act.pillButton(L("＋ ذخیرهٔ این تنظیم", "＋ Save preset"), false) { }
+        saveP.setOnClickListener {
+            Dialogs.input(act, L("نام پیش‌تنظیم", "Preset name"), "") { nm ->
+                val n = nm.trim()
+                if (n.isNotEmpty()) {
+                    FilterPresets.save(act, FilterPresets.P(n, base.filter, base.filterAmt, base.adj.copyOf()))
+                    rebuildPresets()
+                    act.toast(L("ذخیره شد", "Saved"))
+                }
+            }
+        }
+        col.addView(presetScroll, lp(MATCH, WRAP))
+        col.addView(saveP, lp(MATCH, WRAP))
         content.addView(col, FrameLayout.LayoutParams(MATCH, WRAP))
     } else {
         val names = listOf(
@@ -566,8 +658,8 @@ fun EditorActivity.openTextPanel(existing: Overlay?, startTab: Int?) {
                 col.addView(caption(L("رنگ متن", "Text color")), lp(MATCH, WRAP))
                 col.addView(ColorRow(this, t.color) { c -> t.color = c; refresh() }, lp(MATCH, WRAP))
                 col.addView(caption(L("افکت متن", "Text effect")), lp(MATCH, WRAP))
-                val tfxIds = listOf("none", "echo", "echoh", "glass", "neon")
-                val tfxNames = listOf(L("ساده", "Plain"), L("تکرار عمودی (FRIENDSHIP)", "Echo vertical"), L("تکرار افقی", "Echo horizontal"), L("شیشه‌ای", "Glass"), L("نئون", "Neon"))
+                val tfxIds = listOf("none", "echo", "echoh", "glass", "neon", "glitch", "rainbow", "sweep", "ring")
+                val tfxNames = listOf(L("ساده", "Plain"), L("تکرار عمودی (FRIENDSHIP)", "Echo vertical"), L("تکرار افقی", "Echo horizontal"), L("شیشه‌ای", "Glass"), L("نئون", "Neon"), L("گلیچ", "Glitch"), L("رنگین‌کمان", "Rainbow"), L("برق عبوری", "Light sweep"), L("حلقه دور بدن (پشت سوژه)", "Ring around person"))
                 col.addView(ChipRow(this, tfxNames, Math.max(0, tfxIds.indexOf(t.tfx))) { i -> t.tfx = tfxIds[i]; refresh() }, lp(MATCH, WRAP))
                 col.addView(SliderRow(this, L("کانتور", "Outline"), 0f, 100f, t.outlineW * 100f, false, { fmtPct(it) }, { v -> t.outlineW = v / 100f; refresh() }), lp(MATCH, WRAP))
                 col.addView(ColorRow(this, t.outlineColor) { c -> t.outlineColor = c; refresh() }, lp(MATCH, WRAP))
@@ -1016,6 +1108,34 @@ fun EditorActivity.openRecordPanel() {
         }
     }
     swapPanel(box(col))
+}
+
+/** Stops an active voice recording cleanly and keeps its audio (called from onPause/onDestroy,
+ *  so the microphone is never left open after the editor leaves the screen). */
+fun EditorActivity.stopRecordingIfActive() {
+    val r = recorder ?: return
+    try { engine.pause() } catch (e: Throwable) { }
+    try { r.stop() } catch (e: Throwable) { }
+    try { r.release() } catch (e: Throwable) { }
+    recorder = null
+    val f = recFile
+    recFile = null
+    if (f != null) {
+        val a = MediaUtil.audioFromFile(f, L("ضبط صدا", "Voice"), "voice")
+        if (a != null) {
+            a.startMs = recStartTl
+            beginChange()
+            proj.audios.add(a)
+            changed()
+        }
+    }
+}
+
+/** Stops the sound-effect preview player if one is playing. */
+fun EditorActivity.stopSfxPreview() {
+    try { previewPlayer?.stop() } catch (e: Throwable) { }
+    try { previewPlayer?.release() } catch (e: Throwable) { }
+    previewPlayer = null
 }
 
 fun EditorActivity.openTtsPanel() {

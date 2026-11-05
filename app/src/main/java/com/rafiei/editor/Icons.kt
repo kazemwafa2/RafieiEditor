@@ -152,6 +152,17 @@ object Icons {
                 c.drawArc(RectF(-0.08f, -0.2f, 0.2f, 0.2f), -50f, 100f, false, p)
                 c.drawArc(RectF(-0.08f, -0.34f, 0.38f, 0.34f), -50f, 100f, false, p)
             }
+            "audiomusic" -> {
+                // music note (was silently falling through to a plain circle before)
+                p.style = Paint.Style.FILL
+                c.drawCircle(-0.18f, 0.22f, 0.13f, p)
+                c.drawCircle(0.24f, 0.14f, 0.13f, p)
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = 0.09f
+                c.drawLine(-0.06f, 0.22f, -0.06f, -0.32f, p)
+                c.drawLine(-0.06f, -0.32f, 0.36f, -0.4f, p)
+                c.drawLine(0.36f, -0.4f, 0.36f, 0.14f, p)
+            }
             "mute" -> {
                 p.style = Paint.Style.FILL
                 val path = Path()

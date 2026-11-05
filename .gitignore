@@ -4,11 +4,8 @@ local.properties
 .idea/
 *.iml
 
-# Signing keys and secrets
+# Never commit signing material or secrets.
 *.jks
 *.keystore
-local.properties
-.env
-.env.*
-*.pem
-*.key
+keystore.properties
+**/keystore.properties

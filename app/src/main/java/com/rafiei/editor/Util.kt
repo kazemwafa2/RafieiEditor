@@ -154,3 +154,30 @@ fun dirOf(c: Context, name: String): File {
     if (!d.exists()) d.mkdirs()
     return d
 }
+
+/**
+ * Legacy storage permission (Android 7.0-9, API < 29): gallery saves and backups write into
+ * public directories, which needs WRITE_EXTERNAL_STORAGE granted at runtime. On API 29+ the
+ * permission is never requested and the callback runs immediately.
+ * The activity must override onRequestPermissionsResult and call Compat.onPermResult.
+ */
+object Compat {
+    const val REQ_STORAGE = 7001
+    private var after: (() -> Unit)? = null
+
+    fun ensureStorage(a: android.app.Activity, then: () -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 29) { then(); return }
+        val p = android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+        if (a.checkSelfPermission(p) == android.content.pm.PackageManager.PERMISSION_GRANTED) { then(); return }
+        after = then
+        a.requestPermissions(arrayOf(p), REQ_STORAGE)
+    }
+
+    fun onPermResult(a: android.app.Activity, requestCode: Int, grantResults: IntArray) {
+        if (requestCode != REQ_STORAGE) return
+        val cb = after
+        after = null
+        if (grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) cb?.invoke()
+        else android.widget.Toast.makeText(a, L("بدون اجازه‌ی ذخیره، فایل در گالری ذخیره نمی‌شود.", "Without the storage permission the file cannot be saved to the gallery."), android.widget.Toast.LENGTH_LONG).show()
+    }
+}

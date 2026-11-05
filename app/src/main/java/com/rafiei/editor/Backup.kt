@@ -2,7 +2,9 @@ package com.rafiei.editor
 
 import android.content.ContentValues
 import android.content.Context
+import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
@@ -30,16 +32,39 @@ object Backup {
                 }
             }
             val name = "RafieiEditor_backup_" + java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date()) + ".zip"
+            // Android 7.0-9 (API < 29): no scoped storage — write into Downloads directly and index it
+            if (Build.VERSION.SDK_INT < 29) {
+                return try {
+                    val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "RafieiEditor")
+                    if (!dir.exists() && !dir.mkdirs()) return null
+                    val dst = File(dir, name)
+                    tmp.copyTo(dst, true)
+                    tmp.delete()
+                    MediaScannerConnection.scanFile(c, arrayOf(dst.absolutePath), arrayOf("application/zip"), null)
+                    "Downloads/RafieiEditor/$name"
+                } catch (e: Throwable) {
+                    tmp.delete()
+                    null
+                }
+            }
             val values = ContentValues()
             values.put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             values.put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
             values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/RafieiEditor")
             val uri = c.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
             if (uri == null) { tmp.delete(); return null }
-            c.contentResolver.openOutputStream(uri)?.use { out -> tmp.inputStream().use { it.copyTo(out, 256 * 1024) } }
+            val os = c.contentResolver.openOutputStream(uri)
+            if (os == null) {
+                // nothing will be written: report failure instead of a fake success path
+                try { c.contentResolver.delete(uri, null, null) } catch (e: Throwable) { }
+                tmp.delete()
+                return null
+            }
+            os.use { out -> tmp.inputStream().use { it.copyTo(out, 256 * 1024) } }
             tmp.delete()
-            "Download/RafieiEditor/$name"
+            return "Downloads/RafieiEditor/$name"
         } catch (e: Throwable) {
+            println("RafieiEditor backup failed: " + e.javaClass.simpleName + ": " + e.message)
             null
         }
     }
@@ -65,6 +90,7 @@ object Backup {
             }
             n
         } catch (e: Throwable) {
+            println("RafieiEditor restore failed: " + e.javaClass.simpleName + ": " + e.message)
             -1
         }
     }

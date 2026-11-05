@@ -1,5 +1,6 @@
 package com.rafiei.editor
 
+import android.app.AlertDialog
 import android.graphics.Color
 import android.text.Editable
 import android.text.InputType
@@ -218,13 +219,14 @@ private fun fmtP2(v: Float): String = Math.round(v).toString() + "%"
 
 // ------------------------------------------------------------------ subtitles / lyrics
 
-private class SubLine(var startMs: Long, var text: String)
+private class SubLine(var startMs: Long, var text: String, var words: String = "", var tr: String = "")
 
 /** Timed lyrics ("زیرنویس"): every line becomes a text overlay tagged with glyph = "sub". */
 fun EditorActivity.openSubtitlePanel() {
     val existing = proj.overlays.filter { it.kind == "text" && it.glyph == "sub" }.sortedBy { it.startMs }
     val lines = ArrayList<SubLine>()
-    for (o in existing) lines.add(SubLine(o.startMs, o.text))
+    val tr0 = proj.overlays.filter { it.kind == "text" && it.glyph == "sub2" }
+    for (o in existing) lines.add(SubLine(o.startMs, o.text, o.words, tr0.firstOrNull { Math.abs(it.startMs - o.startMs) < 5 }?.text ?: ""))
     // style, taken from the first existing subtitle
     val first = existing.firstOrNull()
     var size = first?.size ?: 0.05f
@@ -233,6 +235,12 @@ fun EditorActivity.openSubtitlePanel() {
     var color = first?.color ?: Color.WHITE
     var bgA = first?.bgAlpha ?: 0.45f
     var font = first?.font ?: Fonts.defaultFa(this)
+    var smode = first?.smode ?: "line"
+    var hi = first?.hiColor ?: 0xFFFFD93D.toInt()
+    var tfxS = first?.tfx ?: "none"
+    var aIn = first?.animIn ?: "none"
+    var aOut = first?.animOut ?: "none"
+    var showTr = true
     val total = Math.max(proj.totalMs(), 1000L)
     var tapIndex = -1
 
@@ -241,11 +249,11 @@ fun EditorActivity.openSubtitlePanel() {
     fun styleOne(o: Overlay) {
         o.size = size; o.cx = cx; o.cy = cy; o.color = color; o.bgColor = Color.BLACK; o.bgAlpha = bgA
         o.font = font; o.bold = true; o.outlineColor = Color.BLACK; o.outlineW = 0.3f; o.scale = 1f; o.rot = 0f
-        o.animIn = "none"; o.animOut = "none"
+        o.animIn = aIn; o.animOut = aOut; o.tfx = tfxS; o.smode = smode; o.hiColor = hi
     }
 
     fun rebuild() {
-        proj.overlays.removeAll { it.kind == "text" && it.glyph == "sub" }
+        proj.overlays.removeAll { it.kind == "text" && (it.glyph == "sub" || it.glyph == "sub2") }
         val timed = lines.filter { it.startMs >= 0 && it.text.isNotBlank() }.sortedBy { it.startMs }
         for ((i, ln) in timed.withIndex()) {
             val o = Overlay()
@@ -255,8 +263,27 @@ fun EditorActivity.openSubtitlePanel() {
             o.startMs = ln.startMs
             val nextStart = if (i + 1 < timed.size) timed[i + 1].startMs else Math.min(total, ln.startMs + 4000L)
             o.durMs = Math.max(300L, Math.min(10000L, nextStart - ln.startMs))
+            // word times: keep them while the text is unchanged, otherwise spread the new words over the line
+            val txt = o.text
+            var ws = SubWords.parse(ln.words)
+            if (ws.isEmpty() || SubWords.join(ws) != txt) {
+                val span = if (ws.isNotEmpty()) Math.max(300L, ws[ws.size - 1].e) else Math.max(300L, o.durMs - 150L)
+                ws = SubWords.spread(txt, span)
+            }
+            ln.words = SubWords.toJson(ws)
+            o.words = ln.words
             styleOne(o)
             proj.overlays.add(o)
+            if (showTr && ln.tr.isNotBlank()) {
+                val o2 = Overlay()
+                o2.kind = "text"; o2.glyph = "sub2"; o2.text = ln.tr.trim(); o2.startMs = o.startMs; o2.durMs = o.durMs
+                styleOne(o2)
+                o2.words = ""; o2.smode = "line"; o2.tfx = "none"
+                o2.size = size * 0.8f
+                o2.cy = if (cy > 0.8f) cy - size * 1.9f else cy + size * 1.9f
+                o2.color = 0xFFFFE9A8.toInt()
+                proj.overlays.add(o2)
+            }
         }
         timeline.relayout()
         stage.top.invalidate()
@@ -264,8 +291,94 @@ fun EditorActivity.openSubtitlePanel() {
     }
 
     fun restyle() {
-        for (o in subs()) styleOne(o)
-        stage.top.invalidate()
+        rebuild()
+    }
+
+    var afterWords: () -> Unit = {}
+
+    /** Per-word times of one line: edit start/end, listen to each word, re-spread after a text edit. */
+    fun editWords(ln: SubLine) {
+        var ws = SubWords.parse(ln.words).map { SubWords.W(it.w, it.s, it.e) }
+        if (ws.isEmpty() || SubWords.join(ws) != ln.text.trim()) ws = SubWords.spread(ln.text, 3000L)
+        val box = lin(true)
+        box.setPadding(dp(8), dp(8), dp(8), dp(4))
+        box.addView(ltCaption(L("زمان‌ها به ثانیه و نسبت به شروع همین خط‌اند. ▶ همان کلمه را از روی صدای پروژه می‌شنوید.", "Times are seconds from this line's start. ▶ plays that word from the project audio.")), lp(MATCH, WRAP))
+        val sA = ArrayList<EditText>()
+        val eA = ArrayList<EditText>()
+        for ((i, w) in ws.withIndex()) {
+            val r = lin(false)
+            r.gravity = Gravity.CENTER_VERTICAL
+            val name = tv(w.w, 14f, Color.WHITE)
+            r.addView(name, lp(0, WRAP, 1f))
+            val a = ltEdit("", String.format(Locale.US, "%.2f", w.s / 1000f), false)
+            val b = ltEdit("", String.format(Locale.US, "%.2f", w.e / 1000f), false)
+            a.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            b.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            sA.add(a); eA.add(b)
+            r.addView(a, lp(dp(62), WRAP))
+            r.addView(b, lp(dp(62), WRAP).also { it.leftMargin = dp(4) })
+            r.addView(ltPill("▶") {
+                val st = ln.startMs + ((a.text.toString().toFloatOrNull() ?: 0f) * 1000f).toLong()
+                val en = ln.startMs + ((b.text.toString().toFloatOrNull() ?: 0f) * 1000f).toLong()
+                try { engine.pause(); engine.seek(Math.max(0L, st - 60L)); engine.play() } catch (e: Throwable) { }
+                Bg.postDelayed(Math.max(250L, en - st + 120L)) { try { engine.pause() } catch (e: Throwable) { } }
+            }, lp(WRAP, WRAP).also { it.leftMargin = dp(4) })
+            box.addView(r, lp(MATCH, WRAP))
+        }
+        val sc = ScrollView(this)
+        sc.addView(box)
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(L("زمان کلمه‌ها", "Word times"))
+            .setView(sc)
+            .setPositiveButton(L("ذخیره", "Save")) { _, _ ->
+                var prev = 0L
+                for ((i, w) in ws.withIndex()) {
+                    val s1 = Math.max(prev, ((sA[i].text.toString().toFloatOrNull() ?: (w.s / 1000f)) * 1000f).toLong())
+                    val e1 = Math.max(s1 + 60L, ((eA[i].text.toString().toFloatOrNull() ?: (w.e / 1000f)) * 1000f).toLong())
+                    w.s = s1; w.e = e1; prev = s1
+                }
+                ln.words = SubWords.toJson(ws)
+                rebuild(); afterWords()
+            }
+            .setNeutralButton(L("پخش مساوی کلمه‌ها", "Re-spread")) { _, _ ->
+                val span = if (ws.isNotEmpty()) Math.max(500L, ws[ws.size - 1].e) else 3000L
+                ln.words = SubWords.toJson(SubWords.spread(ln.text, span))
+                rebuild(); afterWords()
+            }
+            .setNegativeButton(L("بستن", "Close"), null)
+            .show()
+    }
+
+    /** Offline translation (ML Kit): the language pack is downloaded once, text never leaves the phone. */
+    fun translateAll() {
+        val langs = listOf("fa" to L("فارسی/دری", "Persian/Dari"), "en" to "English", "ar" to "العربية", "tr" to "Türkçe", "ru" to "Русский", "hi" to "हिन्दी", "ur" to "اردو", "fr" to "Français", "de" to "Deutsch", "es" to "Español")
+        if (lines.none { it.text.isNotBlank() }) { toast(L("ابتدا زیرنویس بسازید.", "Create subtitles first.")); return }
+        Dialogs.choose(this, L("زبان اصلی زیرنویس", "Subtitle language"), langs.map { it.second }) { a ->
+            Dialogs.choose(this, L("ترجمه به", "Translate to"), langs.map { it.second }) { b ->
+                if (a == b) { toast(L("دو زبان یکی است.", "Same language.")); return@choose }
+                Dialogs.confirm(this, L("ترجمهٔ آفلاین", "Offline translation"),
+                    L("بستهٔ زبان (حدود ۳۰ مگابایت برای هر زبان) یک‌بار دانلود می‌شود و بعد ترجمه روی خود گوشی انجام می‌شود. متن زیرنویس به هیچ سروری فرستاده نمی‌شود.", "A language pack (~30 MB per language) is downloaded once; translation then runs on the phone. Your text is not sent to any server."),
+                    L("ادامه", "Continue")) {
+                    val dlg = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert).setMessage(L("در حال آماده‌سازی ترجمه…", "Preparing translation…")).setCancelable(false).create()
+                    dlg.show()
+                    val opts = com.google.mlkit.nl.translate.TranslatorOptions.Builder().setSourceLanguage(langs[a].first).setTargetLanguage(langs[b].first).build()
+                    val tr = com.google.mlkit.nl.translate.Translation.getClient(opts)
+                    fun fail(m: String) { dlg.dismiss(); try { tr.close() } catch (e: Throwable) { }; Dialogs.message(this, L("ترجمه", "Translate"), L("ترجمه انجام نشد: ", "Translation failed: ") + m) }
+                    fun next(i: Int) {
+                        if (i >= lines.size) {
+                            dlg.dismiss(); try { tr.close() } catch (e: Throwable) { }
+                            showTr = true; rebuild(); afterWords()
+                            toast(L("ترجمه زیر هر خط قرار گرفت؛ متن ترجمه را می‌توانید اصلاح کنید.", "Translation added under each line; you can edit it."))
+                            return
+                        }
+                        dlg.setMessage(L("در حال ترجمه… ", "Translating… ") + (i + 1) + "/" + lines.size)
+                        tr.translate(lines[i].text).addOnSuccessListener { t -> lines[i].tr = t; next(i + 1) }.addOnFailureListener { e -> fail(e.message ?: "") }
+                    }
+                    tr.downloadModelIfNeeded(com.google.mlkit.common.model.DownloadConditions.Builder().build())
+                        .addOnSuccessListener { next(0) }.addOnFailureListener { e -> fail(e.message ?: "") }
+                }
+            }
+        }
     }
 
     val content = FrameLayout(this)
@@ -293,7 +406,7 @@ fun EditorActivity.openSubtitlePanel() {
             val menu = ltPill("⋮") {
                 Dialogs.choose(this, L("خط زیرنویس", "Subtitle line"), listOf(
                     L("کپی همین خط", "Duplicate"), L("تقسیم به دو خط (از وسط)", "Split in two"),
-                    L("ادغام با خط بعدی", "Merge with next"), L("حذف", "Delete"))) { k ->
+                    L("ادغام با خط بعدی", "Merge with next"), L("حذف", "Delete"), L("ویرایش زمان کلمه‌ها 🔊", "Edit word times 🔊"))) { k ->
                     when (k) {
                         0 -> lines.add(idx + 1, SubLine(if (ln.startMs >= 0) ln.startMs + 1000L else -1L, ln.text))
                         1 -> {
@@ -308,6 +421,7 @@ fun EditorActivity.openSubtitlePanel() {
                         }
                         2 -> if (idx + 1 < lines.size) { ln.text = ln.text + " " + lines[idx + 1].text; lines.removeAt(idx + 1) }
                         3 -> lines.removeAt(idx)
+                        4 -> editWords(ln)
                     }
                     rebuild(); refreshRows()
                 }
@@ -538,6 +652,27 @@ fun EditorActivity.openSubtitlePanel() {
     val fonts = Fonts.all(this)
     inner.addView(ChipRow(this, fonts.map { Fonts.displayName(it) + " ابپ" }, Math.max(0, fonts.indexOf(font)), fonts.map { Fonts.get(it, false, false) }) { i -> font = fonts[i]; restyle() }, lp(MATCH, WRAP))
 
+    inner.addView(ltCaption(L("روش نمایش کلمه‌ها", "How words appear")), lp(MATCH, WRAP))
+    val smIds = listOf("line", "kar", "hl", "word")
+    val smNames = listOf(L("خط کامل", "Whole line"), L("کاراوکه (پرشونده)", "Karaoke fill"), L("برجسته‌کردن کلمهٔ جاری", "Highlight current"), L("کلمه‌به‌کلمه", "One word at a time"))
+    inner.addView(ChipRow(this, smNames, Math.max(0, smIds.indexOf(smode))) { i -> smode = smIds[i]; restyle() }, lp(MATCH, WRAP))
+    inner.addView(ltCaption(L("رنگ کلمهٔ در حال گفته‌شدن", "Colour of the word being spoken")), lp(MATCH, WRAP))
+    inner.addView(ColorRow(this, hi) { c2 -> hi = c2; restyle() }, lp(MATCH, WRAP))
+    inner.addView(ltCaption(L("افکت متن", "Text effect")), lp(MATCH, WRAP))
+    val tfIds = listOf("none", "neon", "glitch", "rainbow", "sweep", "glass")
+    val tfNames = listOf(L("ساده", "Plain"), L("نئون", "Neon"), L("گلیچ", "Glitch"), L("رنگین‌کمان", "Rainbow"), L("برق عبوری", "Sweep"), L("شیشه‌ای", "Glass"))
+    inner.addView(ChipRow(this, tfNames, Math.max(0, tfIds.indexOf(tfxS))) { i -> tfxS = tfIds[i]; restyle() }, lp(MATCH, WRAP))
+    inner.addView(ltCaption(L("انیمیشن ورود و خروج", "In / out animation")), lp(MATCH, WRAP))
+    val anIds = Fx.OVERLAY_ANIMS.map { it.id }
+    val anNames = Fx.OVERLAY_ANIMS.map { L(it.fa, it.en) }
+    inner.addView(ChipRow(this, anNames.map { L("ورود: ", "In: ") + it }, Math.max(0, anIds.indexOf(aIn))) { i -> aIn = anIds[i]; restyle() }, lp(MATCH, WRAP))
+    inner.addView(ChipRow(this, anNames.map { L("خروج: ", "Out: ") + it }, Math.max(0, anIds.indexOf(aOut))) { i -> aOut = anIds[i]; restyle() }, lp(MATCH, WRAP))
+    val trRow = lin(false)
+    trRow.setPadding(dp(10), dp(4), dp(10), dp(4))
+    trRow.addView(ltPill(L("🌐 ترجمهٔ آفلاین / دو زبانه", "🌐 Offline translation / bilingual")) { translateAll() }, lp(WRAP, WRAP))
+    trRow.addView(ltPill(L("حذف ترجمه", "Remove translation")) { for (l in lines) l.tr = ""; rebuild() }, lp(WRAP, WRAP).also { it.leftMargin = dp(6) })
+    inner.addView(trRow, lp(MATCH, WRAP))
+
     // saved favourite looks
     val prefs = getSharedPreferences("subtpl", 0)
     fun tpls(): org.json.JSONArray = try { org.json.JSONArray(prefs.getString("list", "[]")) } catch (e: Exception) { org.json.JSONArray() }
@@ -579,6 +714,7 @@ fun EditorActivity.openSubtitlePanel() {
     sv.addView(inner)
     col.addView(sv, lp(MATCH, dp(300)))
     content.addView(col, FrameLayout.LayoutParams(MATCH, WRAP))
+    afterWords = { refreshRows() }
     refreshRows()
     refreshTap()
     openPanel(ltBox(content), true)

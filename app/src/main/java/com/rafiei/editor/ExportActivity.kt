@@ -37,6 +37,8 @@ class ExportActivity : Activity() {
     private var transformer: Transformer? = null
     private var running = false
     private var safeMode = false
+    private var lastPass = 1
+    private var lastOk: Boolean? = null
     private var overlayNote = ""
     private val handler = Handler(Looper.getMainLooper())
     private var outFile: File? = null
@@ -51,6 +53,22 @@ class ExportActivity : Activity() {
     private val origFill = HashMap<String, Boolean>()
     private val frameRatios = listOf("", "9:16", "4:5", "1:1", "16:9")
     private val fpsList = intArrayOf(0, 24, 30)
+    /** CPU wake lock so a long export is not killed when the screen dims. */
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
+    private fun acquireWake() {
+        if (wakeLock != null) return
+        try {
+            val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "RafieiEditor:export")
+            wakeLock?.acquire(60 * 60 * 1000L) // hard cap: 1 h
+        } catch (e: Throwable) { }
+    }
+
+    private fun releaseWake() {
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (e: Throwable) { }
+        wakeLock = null
+    }
 
     private val poll = object : Runnable {
         override fun run() {
@@ -130,7 +148,7 @@ class ExportActivity : Activity() {
 
     private fun neededBytes(): Long {
         val sz = Geo.outSize(proj, resList[resIdx])
-        val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx)
+        val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx, fpsList[fpsIdx])
         val sec = proj.totalMs() / 1000.0
         val one = (br / 8.0 + 24000.0) * sec
         return (one * 2.3).toLong() + 40L * 1048576L
@@ -161,7 +179,7 @@ class ExportActivity : Activity() {
 
     private fun estimate(): String {
         val sz = Geo.outSize(proj, resList[resIdx])
-        val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx)
+        val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx, fpsList[fpsIdx])
         val sec = proj.totalMs() / 1000.0
         val mb = (br / 8.0 + 16000.0) * sec / 1048576.0
         return "${sz[0]}×${sz[1]}  •  ${fmtShort(proj.totalMs())}  •  ≈ ${String.format("%.1f", mb)} MB"
@@ -249,14 +267,16 @@ class ExportActivity : Activity() {
         go.background = gradBg(C.ACCENT2, C.ACCENT, dpf(26f), android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT)
         go.setOnClickListener {
             applyFrame()
-            if (isPhoto) exportPhoto()
-            else if (freeBytes() < neededBytes()) {
-                val need = neededBytes() / 1048576L
-                val have = freeBytes() / 1048576L
-                Dialogs.confirm(this, L("فضای خالی کم است", "Low storage"),
-                    L("برای خروجی حدود $need مگابایت فضا لازم است ولی فقط $have مگابایت آزاد است. ادامه می‌دهید؟", "About $need MB are needed but only $have MB are free. Continue?"),
-                    L("ادامه", "Continue")) { startVideo(false) }
-            } else startVideo(false)
+            Compat.ensureStorage(this) {
+                if (isPhoto) exportPhoto()
+                else if (freeBytes() < neededBytes()) {
+                    val need = neededBytes() / 1048576L
+                    val have = freeBytes() / 1048576L
+                    Dialogs.confirm(this, L("فضای خالی کم است", "Low storage"),
+                        L("برای خروجی حدود $need مگابایت فضا لازم است ولی فقط $have مگابایت آزاد است. ادامه می‌دهید؟", "About $need MB are needed but only $have MB are free. Continue?"),
+                        L("ادامه", "Continue")) { startVideo(false) }
+                } else startVideo(false)
+            }
         }
         val gl = lp(MATCH, dp(52))
         gl.setMargins(dp(16), dp(8), dp(16), dp(20))
@@ -290,9 +310,10 @@ class ExportActivity : Activity() {
         safeMode = safe
         cancelled = false
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        acquireWake()
         showProgress(L("در حال آماده‌سازی…", "Preparing…"), true)
         val sz = Geo.outSize(proj, resList[resIdx])
-        val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx)
+        val br = Exporter.bitrateFor(sz[0], sz[1], qualIdx, fpsList[fpsIdx])
         Bg.run {
             val res: Exporter.Result
             try {
@@ -304,14 +325,18 @@ class ExportActivity : Activity() {
             overlayNote = if (safe) L("حالت ایمن: افکت‌ها و لایه‌ها اعمال نشدند", "Safe mode: effects/layers NOT applied")
                 else if (res.overlay) L("افکت‌ها و لایه‌ها (اکولایزر، نور، افکت، متن) روی خروجی اعمال شد", "Effects/layers were rendered into the video")
                 else L("پروژه افکت یا لایهٔ روی تصویر نداشت", "The project had no effects/layers")
-            Bg.ui { runTransformer(res, br) }
+            // honest warnings when this Media3 build cannot apply speed / fps (they are never silently dropped)
+            if (res.warnings.contains("speed")) overlayNote += "\n" + L("هشدار: تغییر سرعت در این نسخه اعمال نشد!", "Warning: speed change was NOT applied!")
+            if (res.warnings.contains("fps")) overlayNote += "\n" + L("هشدار: نرخ فریم انتخابی اعمال نشد!", "Warning: the selected frame rate was NOT applied!")
+            Bg.ui { runTransformer(res.composition, res.totalMs, br, res.overlay && !safe, 1, null) }
         }
     }
 
-    private fun runTransformer(res: Exporter.Result, bitrate: Int) {
+    /** pass 1 = the normal render; pass 2 = the overlay layer drawn onto the file of pass 1 (only when pass 1 lacked it). */
+    private fun runTransformer(comp: Composition, totalMs: Long, bitrate: Int, expectOverlay: Boolean, pass: Int, prev: File?) {
         if (cancelled) return
-        expectedMs = res.totalMs
-        val f = File(cacheDir, "export_" + System.currentTimeMillis() + ".mp4")
+        expectedMs = totalMs
+        val f = File(cacheDir, "export_" + System.currentTimeMillis() + "_p" + pass + ".mp4")
         outFile = f
         try {
             val enc = DefaultEncoderFactory.Builder(this)
@@ -325,13 +350,72 @@ class ExportActivity : Activity() {
                 .addListener(object : Transformer.Listener {
                     override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                         running = false
-                        onRendered(f)
+                        if (cancelled) return
+                        if (!expectOverlay) { prev?.delete(); onRendered(f); return }
+                        progressText?.text = L("بررسی اعمال افکت‌ها…", "Checking effects…")
+                        val sz = Geo.outSize(proj, resList[resIdx])
+                        Bg.run {
+                            val ok = Exporter.overlayVisible(proj, f, sz[0], sz[1])
+                            Bg.ui {
+                                lastPass = pass; lastOk = ok
+                                if (cancelled) return@ui
+                                if (ok == false && pass == 1) {
+                                    // the effects are missing from the file: draw them onto it in a second pass
+                                    progressText?.text = "0%"
+                                    showProgress(L("افکت‌ها در فایل نبود؛ مرحلهٔ دوم: افزودن افکت‌ها…", "Effects were missing; pass 2: adding them…"), true)
+                                    Bg.run {
+                                        val c2: Composition
+                                        try { c2 = Exporter.buildOverlayPass(proj, f, sz[0], sz[1]) } catch (e: Throwable) {
+                                            Bg.ui { overlayNote = L("هشدار: افکت‌ها اعمال نشدند (", "Warning: effects NOT applied (") + (e.message ?: e.javaClass.simpleName) + ")"; onRendered(f) }
+                                            return@run
+                                        }
+                                        Bg.ui { runTransformer(c2, totalMs, bitrate, true, 2, f) }
+                                    }
+                                } else if (ok == false && pass == 2) {
+                                    // Media3 could not draw the layer either: draw it frame by frame ourselves
+                                    showProgress(L("مرحلهٔ سوم: رسم افکت‌ها فریم‌به‌فریم (کندتر ولی مطمئن)…", "Pass 3: drawing effects frame by frame (slower, reliable)…"), true)
+                                    running = true
+                                    val src = prev ?: f
+                                    val out3 = File(cacheDir, "export_" + System.currentTimeMillis() + "_p3.mp4")
+                                    val brr = bitrate
+                                    Bg.run {
+                                        val good = SoftOverlay.run(proj, f, out3, sz[0], sz[1], brr) { pc -> Bg.ui { progressBar?.progress = pc; progressText?.text = "$pc%" } }
+                                        Bg.ui {
+                                            running = false
+                                            if (cancelled) { out3.delete(); return@ui }
+                                            if (good && out3.length() > 1000) {
+                                                f.delete(); prev?.delete()
+                                                overlayNote = L("افکت‌ها و طرح‌ها در مرحلهٔ سوم (فریم‌به‌فریم) اعمال شد", "Effects were added frame by frame (pass 3)")
+                                                onRendered(out3)
+                                            } else {
+                                                out3.delete(); prev?.delete()
+                                                overlayNote = L("هشدار: افکت‌ها اعمال نشدند (هر سه روش ناموفق بود)", "Warning: effects NOT applied (all 3 methods failed)")
+                                                onRendered(f)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    prev?.delete()
+                                    if (ok == false) overlayNote = L("هشدار: افکت‌ها و طرح‌ها در فایل دیده نشدند! عکس صفحهٔ خروجی را برای بررسی بفرستید.", "Warning: effects were NOT found in the file!")
+                                    else if (pass == 2) overlayNote = L("افکت‌ها و طرح‌ها در مرحلهٔ دوم روی ویدیو اعمال شد", "Effects were added in a second pass")
+                                    else if (ok == true) overlayNote = L("افکت‌ها و طرح‌ها روی خروجی بررسی و تأیید شد", "Effects verified in the exported video")
+                                    else if (ok == null) overlayNote = L("هشدار: وجود افکت‌ها در فایل قابل تأیید نبود (هیچ بخش کاملاً پُر برای مقایسه نبود). فایل را در گالری ببینید.", "Warning: could not verify that the effects are in the file. Please check the video.")
+                                    onRendered(f)
+                                }
+                            }
+                        }
                     }
 
                     override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
                         running = false
                         if (cancelled) return
                         f.delete()
+                        if (pass == 2 && prev != null) {
+                            // pass 2 failed: keep the pass-1 file but say so honestly
+                            overlayNote = L("هشدار: افکت‌ها اعمال نشدند (خطای مرحلهٔ دوم)", "Warning: effects NOT applied (pass 2 failed)")
+                            onRendered(prev)
+                            return
+                        }
                         showError(
                             L("خطا در ساخت ویدیو:\n", "Export failed:\n") + (exportException.message ?: "") + " (" + exportException.errorCodeName + ")",
                             !safeMode
@@ -342,7 +426,7 @@ class ExportActivity : Activity() {
             transformer = t
             running = true
             progressText?.text = "0%"
-            t.start(res.composition, f.absolutePath)
+            t.start(comp, f.absolutePath)
             handler.postDelayed(poll, 300)
         } catch (e: Throwable) {
             running = false
@@ -351,6 +435,8 @@ class ExportActivity : Activity() {
     }
 
     private fun onRendered(f: File) {
+        val ver = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Throwable) { "?" }
+        overlayNote += "\n[v" + ver + " · pass " + lastPass + " · check=" + lastOk + "]"
         progressText?.text = L("در حال ذخیره…", "Saving…")
         Bg.run {
             val dur = durationOf(f)
@@ -358,6 +444,7 @@ class ExportActivity : Activity() {
             val uri = MediaUtil.saveToGallery(this, f, name, "video/mp4", true)
             Bg.ui {
                 if (uri == null) {
+                    f.delete() // the temp render must not leak when the gallery save failed
                     showError(L("ذخیره در گالری ناموفق بود.", "Could not save to gallery."))
                 } else {
                     f.delete()
@@ -406,10 +493,12 @@ class ExportActivity : Activity() {
             c.background = roundedBg(C.CARD, dpf(24f))
             c.setOnClickListener {
                 cancelled = true
+                SoftOverlay.cancel = true
                 running = false
                 try { transformer?.cancel() } catch (e: Throwable) {}
                 outFile?.delete()
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                releaseWake()
                 showOptions()
             }
             val l4 = lp(dp(160), dp(48)); l4.topMargin = dp(36)
@@ -420,6 +509,7 @@ class ExportActivity : Activity() {
 
     private fun showDone(uri: Uri, durMs: Long?, video: Boolean) {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        releaseWake()
         content.removeAllViews()
         val col = lin(true)
         col.gravity = Gravity.CENTER
@@ -473,6 +563,7 @@ class ExportActivity : Activity() {
 
     private fun showError(msg: String, offerSafe: Boolean = false) {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        releaseWake()
         content.removeAllViews()
         val col = lin(true)
         col.gravity = Gravity.CENTER
@@ -510,9 +601,15 @@ class ExportActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacksAndMessages(null)
+        releaseWake()
         if (running) {
             try { transformer?.cancel() } catch (e: Throwable) {}
             outFile?.delete()
         }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        Compat.onPermResult(this, requestCode, grantResults)
     }
 }

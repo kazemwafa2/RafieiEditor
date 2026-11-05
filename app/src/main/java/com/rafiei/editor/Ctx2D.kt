@@ -236,9 +236,12 @@ class Ctx2D(var canvas: Canvas) {
             "screen" -> PorterDuff.Mode.SCREEN
             "multiply" -> PorterDuff.Mode.MULTIPLY
             "overlay" -> PorterDuff.Mode.OVERLAY
+            "lighten" -> PorterDuff.Mode.LIGHTEN
+            "darken" -> PorterDuff.Mode.DARKEN
             else -> null
         }
         p.xfermode = if (m != null) PorterDuffXfermode(m) else null
+        if (st.comp == "soft-light") p.blendMode = android.graphics.BlendMode.SOFT_LIGHT
     }
 
     // ------------------------------------------------------------ paths

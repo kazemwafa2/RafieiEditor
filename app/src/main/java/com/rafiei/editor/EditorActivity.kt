@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -42,9 +43,12 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
     private lateinit var bottomArea: LinearLayout
     private lateinit var playIcon: IconView
     private lateinit var undoIcon: IconView
+    private lateinit var stepBack: TextView
+    private lateinit var stepFwd: TextView
     private lateinit var redoIcon: IconView
     private lateinit var okIcon: IconView
     private lateinit var fullIcon: IconView
+    private lateinit var compareBtn: TextView
     private lateinit var muteBtn: ToolBtn
 
     val undo = ArrayList<String>()
@@ -111,11 +115,27 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
             )
         }
         topBar.addView(help, fl(dp(44), dp(44), Gravity.START or Gravity.CENTER_VERTICAL).also { it.leftMargin = dp(48) })
+        val rightBar = lin(false)
+        rightBar.gravity = Gravity.CENTER_VERTICAL
+        // photo mode: hold to compare with the untouched original (before/after)
+        compareBtn = tv(L("اصلی", "Original"), 12.5f, Color.WHITE, true)
+        compareBtn.background = roundedBg(C.CARD, dpf(16f))
+        compareBtn.setPadding(dp(12), dp(6), dp(12), dp(6))
+        compareBtn.visibility = if (isPhoto) View.VISIBLE else View.GONE
+        compareBtn.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { if (::engine.isInitialized) { engine.compareOriginal = true; engine.refresh() }; v.isPressed = true; true }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { if (::engine.isInitialized) { engine.compareOriginal = false; engine.refresh() }; v.isPressed = false; true }
+                else -> false
+            }
+        }
+        rightBar.addView(compareBtn, lp(WRAP, WRAP).also { it.rightMargin = dp(8) })
         val export = tv(L("خروجی", "Export"), 14f, Color.WHITE, true)
         export.background = gradBg(C.ACCENT2, C.ACCENT, dpf(18f), android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT)
         export.setPadding(dp(18), dp(7), dp(18), dp(7))
         export.setOnClickListener { startExport() }
-        topBar.addView(export, fl(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL).also { it.rightMargin = dp(12) })
+        rightBar.addView(export, lp(WRAP, WRAP).also { it.rightMargin = dp(12) })
+        topBar.addView(rightBar, fl(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL))
         root.addView(topBar, lp(MATCH, dp(48)))
 
         // preview
@@ -136,10 +156,21 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         ur.addView(undoIcon, lp(dp(44), dp(44)))
         ur.addView(redoIcon, lp(dp(44), dp(44)))
         controlBar.addView(ur, fl(WRAP, dp(48), Gravity.START or Gravity.CENTER_VERTICAL).also { it.leftMargin = dp(6) })
+        val pc = lin(false)
+        pc.gravity = Gravity.CENTER_VERTICAL
+        stepBack = tv("‹", 20f, Color.WHITE, true)
+        stepBack.setPadding(dp(10), 0, dp(10), 0)
+        stepBack.setOnClickListener { stepFrame(-1) }
+        pc.addView(stepBack, lp(WRAP, dp(48)))
         playIcon = IconView(this, "play")
         playIcon.padFrac = 0.12f
         playIcon.setOnClickListener { if (!isPhoto) engine.toggle() }
-        controlBar.addView(playIcon, fl(dp(48), dp(48), Gravity.CENTER))
+        pc.addView(playIcon, lp(dp(48), dp(48)))
+        stepFwd = tv("›", 20f, Color.WHITE, true)
+        stepFwd.setPadding(dp(10), 0, dp(10), 0)
+        stepFwd.setOnClickListener { stepFrame(1) }
+        pc.addView(stepFwd, lp(WRAP, dp(48)))
+        controlBar.addView(pc, fl(WRAP, dp(48), Gravity.CENTER))
         fullIcon = IconView(this, "fullscreen")
         fullIcon.setOnClickListener { toggleFullscreen() }
         controlBar.addView(fullIcon, fl(dp(44), dp(44), Gravity.END or Gravity.CENTER_VERTICAL).also { it.rightMargin = dp(8) })
@@ -148,7 +179,7 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         okIcon.visibility = View.GONE
         controlBar.addView(okIcon, fl(dp(48), dp(44), Gravity.END or Gravity.CENTER_VERTICAL).also { it.rightMargin = dp(8) })
         root.addView(controlBar, lp(MATCH, dp(48)))
-        if (isPhoto) playIcon.visibility = View.GONE
+        if (isPhoto) { playIcon.visibility = View.GONE; stepBack.visibility = View.GONE; stepFwd.visibility = View.GONE }
 
         // bottom area
         bottomArea = lin(true)
@@ -200,6 +231,14 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
     override fun onSeek(ms: Long) {
         if (engine.playing) engine.pause()
         engine.seek(ms)
+    }
+
+    /** Frame-exact stepping (one frame at 30 fps) for precise cut points. */
+    fun stepFrame(dir: Int) {
+        if (isPhoto) return
+        if (engine.playing) engine.pause()
+        val step = Math.max(16L, Math.round(1000f / 30f).toLong())
+        engine.seek(clampL(engine.timeMs + dir * step, 0L, proj.totalMs()))
     }
 
     override fun onSelect(sel: Sel?) {
@@ -511,6 +550,7 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         items.add(ToolItem("anim", L("حرکت", "Motion")) { openMotionPanel() })
         items.add(ToolItem("wand", L("استودیو نور", "Light")) { openLightPanel() })
         items.add(ToolItem("crop", L("ماسک", "Mask")) { openMaskPanel() })
+        items.add(ToolItem("effect", L("حذف پس‌زمینه", "Remove BG")) { openCutPanel() })
         items.add(ToolItem("font", L("زیرنویس", "Subtitle")) { openSubtitlePanel() })
         items.add(ToolItem("import", L("فایل SRT", "SRT")) { openSrtMenu() })
         items.add(ToolItem("mic", L("زیرنویس خودکار", "Auto subs")) { openAutoSubPanel() })
@@ -557,6 +597,7 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
         items.add(ToolItem("wand", L("حرکت عکس", "Motion")) { openMotionPanel() })
         items.add(ToolItem("effect", L("نور", "Light")) { openLightPanel() })
         items.add(ToolItem("crop", L("ماسک", "Mask")) { openMaskPanel() })
+        items.add(ToolItem("effect", L("حذف پس‌زمینه", "Remove BG")) { openCutPanel() })
         if (!isPhoto) {
             items.add(ToolItem("copy", L("کپی", "Duplicate")) { duplicateClip() })
             if (!c.isImage) items.add(ToolItem("freeze", L("توقف تصویر", "Freeze")) { freezeFrame() })
@@ -1045,12 +1086,16 @@ class EditorActivity : Activity(), TimelineListener, OverlayListener, EngineList
 
     override fun onPause() {
         super.onPause()
+        stopRecordingIfActive() // never leave the microphone open when the editor is not visible
+        stopSfxPreview()
         if (::engine.isInitialized) engine.pause()
         if (::proj.isInitialized) saveNow()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        stopRecordingIfActive()
+        stopSfxPreview()
         if (::engine.isInitialized) engine.release()
     }
 }
