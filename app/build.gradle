@@ -14,8 +14,8 @@ android {
         // and frame extraction without getScaledFrameAtTime (API 27+).
         minSdk 24
         targetSdk 34
-        versionCode 8
-        versionName "2.3.3"
+        versionCode 9
+        versionName "2.3.4"
         ndk { abiFilters "arm64-v8a", "armeabi-v7a" }
         // Pinned so the native whisper.cpp build uses the same NDK everywhere (CI auto-installs it);
         // matches the prebuilt .cxx outputs, avoiding a full rebuild on this machine.

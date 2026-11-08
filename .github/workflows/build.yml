@@ -25,44 +25,40 @@ jobs:
           gradle-version: 8.7
 
       # ---------------------------------------------------------------------------
-      # Signing: the keystore is NOT in this repository.
-      # Option A (recommended for releases): add these repository secrets —
-      #   KEYSTORE_BASE64   : base64 of your .jks file  (base64 -w0 rafiei.jks)
-      #   KEYSTORE_PASSWORD : the keystore password
-      #   KEY_ALIAS         : the key alias (e.g. rafiei)
-      #   KEY_PASSWORD      : the key password
-      # Option B (testing only): with no secrets, a throwaway CI-local keystore is
-      # generated so the pipeline still produces installable test builds.
-      # ---------------------------------------------------------------------------
-      - name: Restore signing key from secrets (or create a CI-local test key)
+      # Permanent release signing uses GitHub repository secrets:
+      # KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
+      # Non-release builds can use a temporary test key if secrets are absent.
+      - name: Restore permanent signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > rafiei.jks
-            {
-              echo "storeFile=${{ github.workspace }}/rafiei.jks"
-              echo "storePassword=$KEYSTORE_PASSWORD"
-              echo "keyAlias=$KEY_ALIAS"
-              echo "keyPassword=$KEY_PASSWORD"
-            } > keystore.properties
-            echo "Signed with the secret keystore (release keystore restored)."
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "ERROR: Permanent signing secrets are required for releases."
+              exit 1
+            fi
+            keytool -genkeypair -keystore ci-test.jks -storepass ci-test-pass -keypass ci-test-pass -alias ci-test -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Rafiei Editor CI Test, O=Rafiei, C=AF"
+            STORE_FILE="$GITHUB_WORKSPACE/ci-test.jks"
+            STORE_PASS=ci-test-pass
+            ALIAS=ci-test
+            KEY_PASS=ci-test-pass
           else
-            keytool -genkeypair -v -keystore ci-test.jks -storepass ci-test-pass -keypass ci-test-pass \
-              -alias ci-test -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Rafiei Editor CI Test, O=Rafiei, C=AF"
-            {
-              echo "storeFile=${{ github.workspace }}/ci-test.jks"
-              echo "storePassword=ci-test-pass"
-              echo "keyAlias=ci-test"
-              echo "keyPassword=ci-test-pass"
-            } > keystore.properties
-            echo "WARNING: no KEYSTORE_BASE64 secret found -> build signed with a throwaway CI-local key." >> "$GITHUB_STEP_SUMMARY"
-            echo "         Install these APKs for testing only; they cannot be updated over a store build." >> "$GITHUB_STEP_SUMMARY"
+            echo "$KEYSTORE_BASE64" | base64 -d > rafiei.jks
+            keytool -list -keystore rafiei.jks -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
+            STORE_FILE="$GITHUB_WORKSPACE/rafiei.jks"
+            STORE_PASS="$KEYSTORE_PASSWORD"
+            ALIAS="$KEY_ALIAS"
+            KEY_PASS="$KEY_PASSWORD"
           fi
+          {
+            echo "storeFile=$STORE_FILE"
+            echo "storePassword=$STORE_PASS"
+            echo "keyAlias=$ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > keystore.properties
 
       - name: Download real Persian/Arabic fonts (SIL OFL) into the app
         run: |

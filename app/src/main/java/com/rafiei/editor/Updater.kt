@@ -34,7 +34,7 @@ import java.net.URL
  *     by this app.
  */
 object Updater {
-    private const val VERSION = "2.1" // keep in sync with versionName in app/build.gradle
+    private const val VERSION = "2.3.4" // keep in sync with versionName in app/build.gradle
     const val WHATSAPP_URL = "https://wa.me/93770230338" // +93 770 230 338
     const val FACEBOOK_URL = "https://www.facebook.com/share/19wCpvTPeu/"
 
@@ -50,7 +50,7 @@ object Updater {
 
     fun repoUrl(c: Context): String {
         val r = repo(c)
-        return if (r.isEmpty()) "" else "https://github.com/$r"
+        return if (r.isEmpty()) "" else "https://github.com/$r/releases"
     }
 
     /** Installed version, e.g. "2.1". */
