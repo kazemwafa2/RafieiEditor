@@ -87,8 +87,8 @@ object Updater {
                 for (i in 0 until assets.length()) {
                     val a = assets.getJSONObject(i)
                     val nm = a.optString("name", "")
-                    if (nm == "RafieiEditor-apk.zip") {
-                        apkUrl = "https://github.com/$repo/releases/latest/download/RafieiEditor-apk.zip"
+                    if (nm == "RafieiEditor.apk") {
+                        apkUrl = "https://github.com/$repo/releases/latest/download/RafieiEditor.apk"
                         apkName = nm
                         apkSize = a.optLong("size", -1L)
                         break
@@ -192,7 +192,7 @@ object Updater {
                     rel == null -> Dialogs.message(ctx, L("بررسی به‌روزرسانی", "Check for update"),
                         L("اتصال به گیت‌هاب ناموفق بود. اینترنت را بررسی کنید.", "Could not reach GitHub. Check the connection."))
                     rel.apkUrl.isEmpty() -> Dialogs.message(ctx, L("بررسی به‌روزرسانی", "Check for update"),
-                        L("در آخرین انتشار گیت‌هاب فایل RafieiEditor-apk.zip پیوست نشده بود.", "The latest GitHub release has no RafieiEditor-apk.zip attached."))
+                        L("در آخرین انتشار گیت‌هاب فایل RafieiEditor.apk پیوست نشده بود.", "The latest GitHub release has no RafieiEditor.apk attached."))
                     !isNewer(current(ctx), rel.version) -> Dialogs.message(ctx, L("بررسی به‌روزرسانی", "Check for update"),
                         L("شما آخرین نسخه را دارید (", "You already have the latest version (") + current(ctx) + ").")
                     else -> offer(ctx, rel)
@@ -210,52 +210,94 @@ object Updater {
         val notes = a.tv(if (rel.notes.isBlank()) L("یادداشتی نوشته نشده بود.", "No notes were attached.") else rel.notes, 12.5f, C.TXT2)
         notes.setPadding(0, a.dp(8), 0, a.dp(8))
         col.addView(notes, lp(MATCH, WRAP))
-        col.addView(a.tv(L("فایل ZIP دانلود می‌شود. سپس می‌توانید آن را باز کنید و APK را خودتان نصب کنید.", "The ZIP file will be downloaded. You can then extract it and install the APK yourself."), 11.5f, C.TXT2), lp(MATCH, WRAP))
+        col.addView(a.tv(L("فایل APK دانلود می‌شود و نصب‌کننده اندروید باز می‌شود.", "The APK file will be downloaded and the Android installer will open."), 11.5f, C.TXT2), lp(MATCH, WRAP))
         val d = AlertDialog.Builder(a, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle(L("نسخه جدید موجود است", "A new version is available"))
             .setView(col)
-            .setPositiveButton(L("دانلود نسخه جدید", "Download new version")) { _, _ -> downloadFlow(a, rel) }
+            .setPositiveButton(L("دانلود و نصب", "Download and install")) { _, _ -> downloadFlow(a, rel) }
             .setNegativeButton(L("بعداً", "Later"), null)
             .create()
         d.show()
     }
 
     private fun downloadFlow(a: Activity, rel: Release) {
-        try {
-            val fileName = "RafieiEditor-v${rel.version}.zip"
+        val col = LinearLayout(a)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(a.dp(20), a.dp(12), a.dp(20), a.dp(6))
 
-            val request = android.app.DownloadManager.Request(Uri.parse(rel.apkUrl))
-                .setTitle("RafieiEditor v${rel.version}")
-                .setDescription(L("در حال دانلود نسخه جدید برنامه", "Downloading the new app version"))
-                .setMimeType("application/zip")
-                .setNotificationVisibility(
-                    android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
-                )
-                .setAllowedOverMetered(true)
-                .setAllowedOverRoaming(true)
-                .setDestinationInExternalPublicDir(
-                    android.os.Environment.DIRECTORY_DOWNLOADS,
-                    fileName
-                )
+        val status = a.tv(L("در حال دانلود فایل APK…", "Downloading APK…"), 14f, C.TXT, true)
+        col.addView(status, lp(WRAP, WRAP))
 
-            val manager = a.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-            manager.enqueue(request)
+        val pb = ProgressBar(a, null, android.R.attr.progressBarStyleHorizontal)
+        pb.max = 100
+        pb.progress = 0
+        pb.progressTintList = android.content.res.ColorStateList.valueOf(C.ACCENT)
+        col.addView(pb, lp(MATCH, WRAP))
 
-            android.widget.Toast.makeText(
-                a,
-                L("دانلود نسخه جدید شروع شد. فایل در پوشه Download ذخیره می‌شود.",
-                  "Download started. The file will be saved in the Download folder."),
-                android.widget.Toast.LENGTH_LONG
-            ).show()
+        val d = AlertDialog.Builder(a, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("v" + rel.version)
+            .setView(col)
+            .setNegativeButton(L("لغو", "Cancel")) { _, _ -> cancel = true }
+            .setCancelable(false)
+            .create()
+        d.show()
 
-        } catch (e: Throwable) {
-            Dialogs.message(
-                a,
-                L("دانلود ناموفق بود", "Download failed"),
-                L("شروع دانلود امکان‌پذیر نشد. دوباره تلاش کنید.",
-                  "Could not start the download. Please try again.")
-            )
+        val f = File(a.cacheDir, "update_" + rel.version + ".apk")
+
+        Bg.run {
+            val err = downloadApk(rel.apkUrl, rel.apkSize, f) { p ->
+                Bg.ui {
+                    if (d.isShowing) pb.progress = p
+                }
+            }
+
+            Bg.ui {
+                if (!a.isFinishing && !a.isDestroyed) {
+                    try { d.dismiss() } catch (e: Throwable) {}
+                }
+
+                when {
+                    err == "cancelled" -> {}
+                    err != null -> Dialogs.message(
+                        a,
+                        L("دانلود ناموفق بود", "Download failed"),
+                        L("دانلود کامل نشد. دوباره تلاش کنید.", "Download did not finish. Please try again.")
+                    )
+                    else -> {
+                        val parseOk = try {
+                            a.packageManager.getPackageArchiveInfo(f.absolutePath, 0) != null
+                        } catch (e: Throwable) { false }
+
+                        if (!parseOk) {
+                            f.delete()
+                            Dialogs.message(
+                                a,
+                                L("فایل معتبر نیست", "Invalid file"),
+                                L("فایل APK معتبر نیست.", "The downloaded APK is not valid.")
+                            )
+                            return@ui
+                        }
+
+                        when (signatureMatches(a, f.absolutePath)) {
+                            true -> install(a, f)
+                            false -> Dialogs.confirm(
+                                a,
+                                L("امضای متفاوت", "Different signature"),
+                                L("این APK با کلید دیگری امضا شده است. نصب آن ممکن است نیاز به حذف نسخه قبلی داشته باشد و اطلاعات برنامه پاک شود. ادامه می‌دهید؟",
+                                  "This APK has a different signing key. Installing it may require uninstalling the previous version and may erase app data. Continue?"),
+                                L("ادامه", "Continue")
+                            ) { install(a, f) }
+                            null -> Dialogs.confirm(
+                                a,
+                                L("بررسی امضا ناموفق بود", "Signature check failed"),
+                                L("امضای APK قابل بررسی نبود. نصب ممکن است نیاز به حذف نسخه قبلی داشته باشد. ادامه می‌دهید؟",
+                                  "The APK signature could not be checked. Installing may require uninstalling the previous version. Continue?"),
+                                L("ادامه", "Continue")
+                            ) { install(a, f) }
+                        }
+                    }
+                }
+            }
         }
     }
 
-}
